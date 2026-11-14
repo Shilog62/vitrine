@@ -83,17 +83,34 @@ static void show(NSURL *file) {
         BOOL fits = fabs(poster.size.width / poster.size.height - ratio) <= kSameShape;
         NSURL *shaped = fits ? file : SGMotionMadeFile([NSString stringWithFormat:@"cut\n%@\n%g", file.lastPathComponent, ratio]);
         MPMediaItemAnimatedArtwork *artwork = [[MPMediaItemAnimatedArtwork alloc] initWithArtworkID:shaped.lastPathComponent
-            previewImageRequestHandler:^(CGSize wanted, void (^completion)(UIImage *)) { completion(filled(poster, wanted)); }
+            previewImageRequestHandler:^(CGSize wanted, void (^completion)(UIImage *)) {
+                UIImage *preview = filled(poster, wanted);
+                SGLog(@"lock motion: preview requested for %@ (%.0fx%.0f), returning %@",
+                      shaped.lastPathComponent, wanted.width, wanted.height,
+                      preview ? [NSString stringWithFormat:@"%.0fx%.0f", preview.size.width, preview.size.height] : @"nil");
+                completion(preview);
+            }
             videoAssetFileURLRequestHandler:^(CGSize wanted, void (^completion)(NSURL *)) {
+                SGLog(@"lock motion: VIDEO URL REQUEST for %@ (%.0fx%.0f), source=%@",
+                      shaped.lastPathComponent, wanted.width, wanted.height, file.lastPathComponent);
                 if (fits) {
-                    completion(file);
+                    NSNumber *bytes = nil;
+                    BOOL exists = [NSFileManager.defaultManager fileExistsAtPath:file.path];
+                    if (exists) [file getResourceValue:&bytes forKey:NSURLFileSizeKey error:nil];
+                    SGLog(@"lock motion: returning original video %@, exists=%@, size=%@ bytes",
+                          file.lastPathComponent, exists ? @"YES" : @"NO", bytes ?: @0);
+                    completion(exists ? file : nil);
                     return;
                 }
                 dispatch_async(sg_queue, ^{
                     CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
                     BOOL ok = [NSFileManager.defaultManager fileExistsAtPath:shaped.path] || SGMotionClipShape(file, ratio, shaped);
-                    SGLog(@"lock motion: %@ cut to %@ %@ in %.0f ms", file.lastPathComponent, ratio == 1 ? @"1:1" : @"3:4",
-                          ok ? @"ready" : @"not written", (CFAbsoluteTimeGetCurrent() - start) * 1000);
+                    NSNumber *bytes = nil;
+                    if (ok) [shaped getResourceValue:&bytes forKey:NSURLFileSizeKey error:nil];
+                    SGLog(@"lock motion: %@ cut to %@ %@, exists=%@, size=%@ bytes, in %.0f ms",
+                          file.lastPathComponent, ratio == 1 ? @"1:1" : @"3:4",
+                          ok ? @"ready" : @"not written", ok ? @"YES" : @"NO", bytes ?: @0,
+                          (CFAbsoluteTimeGetCurrent() - start) * 1000);
                     completion(ok ? shaped : nil);
                 });
             }];
