@@ -1,9 +1,0 @@
-Nov 14 20:13:54.698705 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] connect: 31 rounds and 150 repeats he
-Nov 14 20:13:57.924756 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] lock motion: the choice changed to 1,
-Nov 14 20:13:57.932960 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] motion: the next track's clip fetched
-Nov 14 20:13:57.932978 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] lock lyrics: no longer picked
-Nov 14 20:13:58.074191 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] lock motion: 8bf6e569739007b92b253aa4
-Nov 14 20:13:59.188960 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] motion: the next track's clip fetched
-Nov 14 20:13:59.189295 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] sing: Spotify landed at 0.00 s 0.09 s
-Nov 14 20:13:59.382123 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] redesign kit: artwork 25180571abce947
-Nov 14 20:14:00.721611 Spotify(spotifyglass.dylib)[5856] <Notice>: [spotifyglass] live activity: cover of 6UelLqGlWMcVH
