@@ -58,43 +58,63 @@ static void canvasFromService(NSString *uri, void (^done)(NSURL *canvas)) {
         [sg_asking[uri] addObject:[done copy]];
         return;
     }
-    // Asked only with the headers already seen: the walk does not wait for Spotify's first request.
-    __block NSDictionary<NSString *, NSString *> *headers = nil;
-    __block BOOL waited = NO;
-    SGSpclientHeaders(^(NSDictionary<NSString *, NSString *> *seen) {
-        if (!waited) headers = seen;
-    });
-    waited = YES;
-    NSData *body = SGMotionCanvasAsk(uri);
-    if (!headers || !body) {
-        done(nil);
-        return;
-    }
     if (!sg_answers) sg_answers = [NSMutableDictionary dictionary];
     if (!sg_asking) sg_asking = [NSMutableDictionary dictionary];
     sg_asking[uri] = [NSMutableArray arrayWithObject:[done copy]];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://spclient.wg.spotify.com/canvaz-cache/v0/canvases"]];
-    request.HTTPMethod = @"POST";
-    request.HTTPBody = body;
-    [headers enumerateKeysAndObjectsUsingBlock:^(NSString *name, NSString *value, BOOL *stop) {
-        [request setValue:value forHTTPHeaderField:name];
-    }];
-    [request setValue:@"application/x-protobuf" forHTTPHeaderField:@"Content-Type"];
-    request.allowsConstrainedNetworkAccess = SGFlag(SGKeyMotionLowData, NO);
-    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *reply, NSURLResponse *response, NSError *error) {
-        NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
-        NSString *address = status == 200 ? SGMotionCanvasInReply(reply) : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            static NSUInteger logged;
-            if (logged++ < 5 || status != 200) SGLog(@"motion: Canvas service for %@: %ld, %@", uri, (long)status, address ? @"a video" : @"none");
-            if (status == 200) sg_answers[uri] = address ?: (id)NSNull.null;
-            NSArray *waiting = sg_asking[uri];
-            [sg_asking removeObjectForKey:uri];
-            for (void (^waiter)(NSURL *) in waiting) waiter(address ? [NSURL URLWithString:address] : nil);
-        });
-    }] resume];
-}
 
+    NSData *body = SGMotionCanvasAsk(uri);
+    if (!body) {
+        NSArray *waiting = sg_asking[uri];
+        [sg_asking removeObjectForKey:uri];
+        for (void (^waiter)(NSURL *) in waiting) waiter(nil);
+        return;
+    }
+
+    // SGSpclientHeaders may answer later, when Spotify has made its first authenticated request.
+    // Do not test the block's result immediately: that races the callback and silently skips Canvas.
+    __block BOOL finished = NO;
+    dispatch_block_t fail = ^{
+        if (finished) return;
+        finished = YES;
+        NSArray *waiting = sg_asking[uri];
+        [sg_asking removeObjectForKey:uri];
+        for (void (^waiter)(NSURL *) in waiting) waiter(nil);
+    };
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), fail);
+
+    SGSpclientHeaders(^(NSDictionary<NSString *, NSString *> *headers) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (finished) return;
+            if (!headers.count) {
+                fail();
+                return;
+            }
+            finished = YES;
+
+            NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://spclient.wg.spotify.com/canvaz-cache/v0/canvases"]];
+            request.HTTPMethod = @"POST";
+            request.HTTPBody = body;
+            [headers enumerateKeysAndObjectsUsingBlock:^(NSString *name, NSString *value, BOOL *stop) {
+                [request setValue:value forHTTPHeaderField:name];
+            }];
+            [request setValue:@"application/x-protobuf" forHTTPHeaderField:@"Content-Type"];
+            request.allowsConstrainedNetworkAccess = SGFlag(SGKeyMotionLowData, NO);
+            [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *reply, NSURLResponse *response, NSError *error) {
+                NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+                NSString *address = status == 200 ? SGMotionCanvasInReply(reply) : nil;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    static NSUInteger logged;
+                    if (logged++ < 5 || status != 200) SGLog(@"motion: Canvas service for %@: %ld, %@", uri, (long)status, address ? @"a video" : @"none");
+                    if (status == 200) sg_answers[uri] = address ?: (id)NSNull.null;
+                    NSArray *waiting = sg_asking[uri];
+                    [sg_asking removeObjectForKey:uri];
+                    for (void (^waiter)(NSURL *) in waiting) waiter(address ? [NSURL URLWithString:address] : nil);
+                });
+            }] resume];
+        });
+    });
+}
 void SGMotionClipFor(NSString *uri, NSURL *canvas, NSString *artist, NSString *album, SGMotionShape shape, CGFloat pixels,
                      void (^done)(NSURL *file, NSString *source)) {
     NSArray<NSString *> *order = SGMotionSourceOrder();
