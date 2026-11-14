@@ -1,0 +1,100 @@
+69(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.444534 symptomsd(RunningBoardServices)[207] <Info>: Update skipped for [app<com.spotify.client.4VC6SP28
+69(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.444748 gamepolicyd(RunningBoardServices)[409] <Notice>: Received state update for 5856 (app<com.spotify
+.client.4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>, running-active-NotVisible
+Nov 14 20:14:12.444861 WirelessRadioManagerd(RunningBoardServices)[54] <Notice>: Received state update for 5856 (app<co
+m.spotify.client.4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>, running-active-NotVisible
+Nov 14 20:14:12.445429 gamepolicyd(RunningBoardServices)[409] <Info>: Update delivered for [app<com.spotify.client.4VC6
+SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856] with taskState 4
+Nov 14 20:14:12.445636 WirelessRadioManagerd(RunningBoardServices)[54] <Info>: Update skipped for [app<com.spotify.clie
+nt.4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.447064 dasd(RunningBoardServices)[87] <Notice>: Received state update for 5856 (app<com.spotify.client.
+4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>, running-active-NotVisible
+Nov 14 20:14:12.447162 dasd(RunningBoardServices)[87] <Info>: Update skipped for [app<com.spotify.client.4VC6SP2869(FEE
+DEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.447216 dasd(RunningBoardServices)[87] <Info>: Update skipped for [app<com.spotify.client.4VC6SP2869(FEE
+DEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.447309 dasd(RunningBoardServices)[87] <Info>: Update skipped for [app<com.spotify.client.4VC6SP2869(FEE
+DEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.447354 dasd(RunningBoardServices)[87] <Info>: Update skipped for [app<com.spotify.client.4VC6SP2869(FEE
+DEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.447427 backboardd(RunningBoardServices)[73] <Notice>: Received state update for 5856 (app<com.spotify.c
+lient.4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>, running-active-NotVisible
+Nov 14 20:14:12.447534 backboardd(RunningBoardServices)[73] <Info>: Update skipped for [app<com.spotify.client.4VC6SP28
+69(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.447945 watchdogd(RunningBoardServices)[64] <Notice>: Received state update for 5856 (app<com.spotify.cl
+ient.4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>, running-active-NotVisible
+Nov 14 20:14:12.448120 watchdogd(RunningBoardServices)[64] <Info>: Update skipped for [app<com.spotify.client.4VC6SP286
+9(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.448246 videocodecd(RunningBoardServices)[240] <Notice>: Received state update for 5856 (app<com.spotify
+.client.4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>, running-active-NotVisible
+Nov 14 20:14:12.448604 videocodecd(RunningBoardServices)[240] <Info>: Update skipped for [app<com.spotify.client.4VC6SP
+2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>:5856]
+Nov 14 20:14:12.534190 runningboardd(RunningBoard)[36] <Debug>: Decrementing suppression state to 0 for app<com.spotify
+.client.4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>
+Nov 14 20:14:12.534287 runningboardd(RunningBoard)[36] <Debug>: END suppressing state updates for app<com.spotify.clien
+t.4VC6SP2869(FEEDEEEE-DDDD-CCCC-BBBB-0000000001F5)>
+Nov 14 20:14:12.568322 locationd[79] <Notice>: {"msg":"#CLIUA Marking change", "clientKey":"icom.spotify.client.4VC6SP2
+869:", "reason":"Decaying in-use status from process state", "AssertionLevel":"kCLClientInUseLevelDecayingUserEngagemen
+t", "coming":0}
+Nov 14 20:14:12.568426 locationd[79] <Notice>: {"msg":"#CLIUA updating AssertionRecord", "ClientKey":"icom.spotify.clie
+nt.4VC6SP2869:", "AssertionLevel":"kCLClientInUseLevelOngoingTransaction"}
+Nov 14 20:14:12.568499 locationd[79] <Notice>: {"msg":"#CLIUA AssertionRecord updated", "ClientKey":"icom.spotify.clien
+t.4VC6SP2869:", "AssertionLevel":"kCLClientInUseLevelOngoingTransaction"}
+Nov 14 20:14:12.667645 Spotify(Network)[5856] <Debug>: nw_association_schedule_deactivation_block_invoke <nw_associatio
+n Hostname#5df6d6d5:443> becoming dormant
+Nov 14 20:14:12.667689 Spotify(Network)[5856] <Debug>: -[NWConcrete_nw_path_evaluator dealloc] 9310FEF2-ACB1-4139-9358-
+DF1BB7CBB2F7
+Nov 14 20:14:12.667859 Spotify(Network)[5856] <Debug>: nw_association_schedule_deactivation_block_invoke <nw_associatio
+n IPv6#1e9a78ad.443> becoming dormant
+Nov 14 20:14:12.667922 Spotify(Network)[5856] <Debug>: -[NWConcrete_nw_path_evaluator dealloc] DDFF8E2C-CE61-412B-A406-
+6F7D0FACBE55
+Nov 14 20:14:12.667978 Spotify(Network)[5856] <Debug>: nw_association_schedule_deactivation_block_invoke <nw_associatio
+n IPv4#f76eede5:443> becoming dormant
+Nov 14 20:14:12.668004 Spotify(Network)[5856] <Debug>: -[NWConcrete_nw_path_evaluator dealloc] 8156890D-01D7-4D17-8A8A-
+1296FD0780D7
+Nov 14 20:14:12.669109 Spotify(Network)[5856] <Debug>: nw_association_schedule_deactivation_block_invoke <nw_associatio
+n Hostname#5df6d6d5:443> becoming dormant
+Nov 14 20:14:12.669964 Spotify(Network)[5856] <Debug>: -[NWConcrete_nw_path_evaluator dealloc] C5ABEA66-184E-4765-8600-
+C79DFA510D78
+Nov 14 20:14:12.670025 Spotify(CFNetwork)[5856] <Debug>: removing all entries config 0x147306120
+Nov 14 20:14:12.670057 Spotify(Network)[5856] <Info>: nw_context_dealloc Deallocating context <nw_context (null) (priva
+te)>
+Nov 14 20:14:12.670086 Spotify(Network)[5856] <Info>: nw_context_purge_endpoints Context <nw_context com.apple.CFNetwor
+k.NSURLSession.{CE00BAEC-11CA-4E2F-9E5A-FF30D6865ACE}{(null)}{Y}{2}{0x0} (private)> has more than 0 cache entries, purg
+ing 1 from 1 down to 0
+Nov 14 20:14:12.670119 Spotify(Network)[5856] <Debug>: endpoint <private> has nothing to cleanup, no protocol instance 
+registrars
+Nov 14 20:14:12.670280 Spotify(CoreFoundation)[5856] <Debug>: found no value for key <private> in CFPrefsSearchListSour
+ce<0x140bae1c0> (Domain: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
+Nov 14 20:14:12.670304 Spotify(Network)[5856] <Debug>: endpoint <private> has nothing to cleanup, no protocol instance 
+registrars
+Nov 14 20:14:12.670325 Spotify(Network)[5856] <Debug>: endpoint <private> has nothing to cleanup, no protocol instance 
+registrars
+Nov 14 20:14:12.670345 Spotify(Network)[5856] <Debug>: endpoint <private> has nothing to cleanup, no protocol instance 
+registrars
+Nov 14 20:14:12.670378 Spotify(Network)[5856] <Info>: nw_context_dealloc Deallocating context <nw_context (null) (priva
+te)>
+Nov 14 20:14:12.670402 Spotify(CoreFoundation)[5856] <Debug>: looked up value <private> for key <private> in CFPrefsPli
+stSource<0x1122e9820> (Domain: com.spotify.client.4VC6SP2869, User: kCFPreferencesCurrentUser, ByHost: No, Container: (
+null), Contents Need Refresh: No (Cached: 951, Newest: 951, Index: 826) via CFPrefsSearchListSource<0x140bae1c0> (Domai
+n: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
+Nov 14 20:14:12.670433 Spotify(CoreFoundation)[5856] <Debug>: found no value for key <private> in CFPrefsSearchListSour
+ce<0x140bae1c0> (Domain: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
+Nov 14 20:14:12.671160 Spotify(CoreFoundation)[5856] <Debug>: found no value for key <private> in CFPrefsSearchListSour
+ce<0x140bae1c0> (Domain: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
+Nov 14 20:14:12.871479 Spotify(CoreFoundation)[5856] <Debug>: looked up value <private> for key <private> in CFPrefsPli
+stSource<0x1122e9820> (Domain: com.spotify.client.4VC6SP2869, User: kCFPreferencesCurrentUser, ByHost: No, Container: (
+null), Contents Need Refresh: No (Cached: 951, Newest: 951, Index: 826) via CFPrefsSearchListSource<0x140bae1c0> (Domai
+n: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
+Nov 14 20:14:13.175974 Spotify(CoreFoundation)[5856] <Debug>: found no value for key <private> in CFPrefsSearchListSour
+ce<0x140bae1c0> (Domain: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
+Nov 14 20:14:13.176334 Spotify(CoreFoundation)[5856] <Debug>: looked up value <private> for key <private> in CFPrefsPli
+stSource<0x1122e9820> (Domain: com.spotify.client.4VC6SP2869, User: kCFPreferencesCurrentUser, ByHost: No, Container: (
+null), Contents Need Refresh: No (Cached: 951, Newest: 951, Index: 826) via CFPrefsSearchListSource<0x140bae1c0> (Domai
+n: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
+Nov 14 20:14:13.176380 Spotify(CoreFoundation)[5856] <Debug>: found no value for key <private> in CFPrefsSearchListSour
+ce<0x140bae1c0> (Domain: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
+Nov 14 20:14:13.176446 Spotify(CoreFoundation)[5856] <Debug>: found no value for key <private> in CFPrefsSearchListSour
+ce<0x140bae1c0> (Domain: com.spotify.client.4VC6SP2869, Container: (null) Non-launch persona: 0)
