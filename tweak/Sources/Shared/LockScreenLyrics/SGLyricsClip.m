@@ -327,7 +327,7 @@ static Over makeOver(Motion motion, NSString *previous, NSString *line, NSString
     // Blur the whole path the words travel through, not just their starting position.
     CGRect swept = CGRectUnion(over.drawn, CGRectOffset(over.drawn, 0, over.scrollDistance));
     swept = CGRectIntersection(swept, (CGRect){CGPointZero, motion.cut});
-    over.soft = CGRectMake(cut.origin.x + swept.origin.x, cut.origin.y + swept.origin.y, cut.size.width, swept.size.height);
+    over.soft = CGRectMake(cut.origin.x, cut.origin.y + swept.origin.y, cut.size.width, swept.size.height);
     // Faded over the margin newWords leaves about the words, a font size, so every line is on blurred picture.
     size_t width = (size_t)over.soft.size.width, height = (size_t)over.soft.size.height;
     size_t fade = MAX(MIN((size_t)(motion.cut.width * kFont), height / 2), 1);
