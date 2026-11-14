@@ -115,7 +115,7 @@ static NSAttributedString *wordsAt(NSString *previous, NSString *line, NSString 
 // The words alone on a clear image the size of the clip, nil when there are none. Over moving artwork they
 // carry a shadow, the dimmed lines are less dim, and the image is only the words' box, which `drawn` gets
 // the place of in the clip.
-static CGImageRef newWords(NSString *previous, NSString *line, NSString *next, CGSize size, CGRect *drawn) CF_RETURNS_RETAINED {
+static CGImageRef newWords(NSString *previous, NSString *line, NSString *next, CGSize size, CGRect *drawn, CGFloat *scrollDistance) CF_RETURNS_RETAINED {
     if (!previous.length && !line.length && !next.length) return NULL;
     CGFloat width = round(size.width * kColumn);
     CGFloat fontSize = size.width * kFont;
@@ -141,6 +141,30 @@ static CGImageRef newWords(NSString *previous, NSString *line, NSString *next, C
         CGContextSetShadowWithColor(context, CGSizeZero, fontSize * kShadowBlur, color);
         CGColorRelease(color);
         CGColorSpaceRelease(space);
+    }
+    // For moving lyrics, find the baseline of the current paragraph and the next one. Moving the
+    // rendered word image by this exact distance brings the next line into the current line's place.
+    if (scrollDistance) {
+        *scrollDistance = 0;
+        if (line.length && next.length) {
+            CFArrayRef frameLines = CTFrameGetLines(frame);
+            CFIndex count = CFArrayGetCount(frameLines);
+            CGPoint *origins = count ? calloc((size_t)count, sizeof(CGPoint)) : NULL;
+            if (origins) {
+                CTFrameGetLineOrigins(frame, CFRangeMake(0, 0), origins);
+                CFIndex currentIndex = -1, nextIndex = -1;
+                CFIndex currentStart = (CFIndex)(previous.length ? previous.length + 1 : 0);
+                CFIndex nextStart = currentStart + (CFIndex)line.length + 1;
+                for (CFIndex i = 0; i < count; i++) {
+                    CFRange range = CTLineGetStringRange((CTLineRef)CFArrayGetValueAtIndex(frameLines, i));
+                    if (currentIndex < 0 && range.location <= currentStart && range.location + range.length > currentStart) currentIndex = i;
+                    if (nextIndex < 0 && range.location <= nextStart && range.location + range.length > nextStart) nextIndex = i;
+                }
+                if (currentIndex >= 0 && nextIndex > currentIndex)
+                    *scrollDistance = MAX(0, origins[currentIndex].y - origins[nextIndex].y);
+                free(origins);
+            }
+        }
     }
     CTFrameDraw(frame, context);
     CGImageRef words = CGBitmapContextCreateImage(context);
@@ -168,7 +192,7 @@ static void drawFrame(CGContextRef context, CGImageRef backdrop, CGImageRef word
 }
 
 CGImageRef SGLyricsClipFrame(CGImageRef backdrop, NSString *line, NSString *next, CGSize size) {
-    CGImageRef words = newWords(nil, line, next, size, NULL);
+    CGImageRef words = newWords(nil, line, next, size, NULL, NULL);
     CGContextRef context = newContext(size, NULL, 0);
     drawFrame(context, backdrop, words, size, 0);
     CGImageRef frame = CGBitmapContextCreateImage(context);
@@ -201,7 +225,7 @@ BOOL SGLyricsClipWrite(NSURL *file, CGImageRef backdrop, NSString *line, NSStrin
     [writer addInput:input];
     if (![writer startWriting]) return NO;
     [writer startSessionAtSourceTime:kCMTimeZero];
-    CGImageRef words = newWords(nil, line, next, size, NULL);
+    CGImageRef words = newWords(nil, line, next, size, NULL, NULL);
     BOOL ok = YES;
     for (int32_t i = 0; i < frames && ok; i++) {
         while (!input.readyForMoreMediaData && writer.status == AVAssetWriterStatusWriting) [NSThread sleepForTimeInterval:0.002];
@@ -276,6 +300,7 @@ static CGRect cutIn(Motion motion) {
 typedef struct {
     CGImageRef words;     // the words' box, NULL for none
     CGRect drawn;         // where it goes in the cut
+    CGFloat scrollDistance; // baseline distance from the sung line to the next one
     uint16_t *keep;       // how much of the picture each row of the cut keeps, of 256, from the top: the dimming
     CGRect soft;          // the rows behind the words, across the cut, in the stored frame
     uint8_t *blurred;     // those rows blurred, NULL with no words
@@ -293,7 +318,7 @@ static CGFloat dimAt(size_t y, size_t height) {
 
 static Over makeOver(Motion motion, NSString *previous, NSString *line, NSString *next) {
     Over over = {0};
-    over.words = newWords(previous, line, next, motion.cut, &over.drawn);
+    over.words = newWords(previous, line, next, motion.cut, &over.drawn, &over.scrollDistance);
     size_t rows = (size_t)motion.cut.height;
     over.keep = malloc(rows * sizeof(uint16_t));
     for (size_t y = 0; y < rows; y++) over.keep[y] = (uint16_t)round(256 * (1 - dimAt(y, rows)));
@@ -320,7 +345,7 @@ static void freeOver(Over over) {
 // the words blurred (Accelerate's tent blur) and faded in, every row of the cut darkened by its share in one
 // pass, and one image the size of the words. All on the CPU. NO, with the frame left as it is, for a frame of
 // another size or format than the track states, so the clip is not written without its words.
-static BOOL drawOver(CVPixelBufferRef buffer, Motion motion, Over over) {
+static BOOL drawOver(CVPixelBufferRef buffer, Motion motion, Over over, double elapsed, double scrollDuration) {
     CVPixelBufferLockBaseAddress(buffer, 0);
     uint8_t *base = CVPixelBufferGetBaseAddress(buffer);
     size_t bytesPerRow = CVPixelBufferGetBytesPerRow(buffer);
@@ -363,7 +388,12 @@ static BOOL drawOver(CVPixelBufferRef buffer, Motion motion, Over over) {
     }
     if (over.words) {
         CGContextRef context = newContext(motion.stored, base, bytesPerRow);
-        CGContextDrawImage(context, CGRectOffset(over.drawn, cut.origin.x, cut.origin.y), over.words);
+        // Smoothly move the next lyric into the sung line's place. The final second of the clip
+        // is held still so the lock screen can replace this artwork at the lyric boundary.
+        double t = scrollDuration > 0 ? MIN(MAX(elapsed / scrollDuration, 0), 1) : 0;
+        CGFloat progress = (CGFloat)(t * t * (3 - 2 * t));
+        CGRect destination = CGRectOffset(over.drawn, cut.origin.x, cut.origin.y + over.scrollDistance * progress);
+        CGContextDrawImage(context, destination, over.words);
         CGContextRelease(context);
     }
     CVPixelBufferUnlockBaseAddress(buffer, 0);
@@ -426,7 +456,7 @@ CGImageRef SGLyricsClipMotionFrame(NSURL *motionFile, NSString *previous, NSStri
     __block CGImageRef frame = NULL;
     eachFrame(asset, track, motion, from, motion.length, ^BOOL(CMSampleBufferRef sample) {
         CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sample);
-        if (!drawOver(buffer, motion, over)) return NO;
+        if (!drawOver(buffer, motion, over, 0, 0)) return NO;
         CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
         CGContextRef context = newContext(motion.stored, CVPixelBufferGetBaseAddress(buffer), CVPixelBufferGetBytesPerRow(buffer));
         CGImageRef whole = CGBitmapContextCreateImage(context);
@@ -466,7 +496,11 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
     Over over = makeOver(motion, previous, line, next);
     __block BOOL ok = YES, any = NO;
     BOOL read = eachFrame(asset, track, motion, from, seconds, ^BOOL(CMSampleBufferRef sample) {
-        if (!drawOver(CMSampleBufferGetImageBuffer(sample), motion, over)) {
+        double elapsed = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample));
+        // Eight-second clips can loop before an unusually long lyric changes. Keep those stationary
+        // rather than letting a completed scroll visibly jump back to its starting position.
+        double scrollDuration = seconds < 7.99 ? MAX(seconds - 1, 0.1) : 0;
+        if (!drawOver(CMSampleBufferGetImageBuffer(sample), motion, over, elapsed, scrollDuration)) {
             ok = NO;
             return NO;
         }
