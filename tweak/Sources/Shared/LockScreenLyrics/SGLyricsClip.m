@@ -290,7 +290,14 @@ static AVAssetTrack *motionTrack(AVURLAsset *asset, Motion *motion) {
         return nil;
     }
     if (!CGAffineTransformIsIdentity(track.preferredTransform)) {
-        SGLog(@"lock lyrics: motion track rejected file=%@ reason=preferred-transform transform=%@", asset.URL.lastPathComponent, NSStringFromCGAffineTransform(track.preferredTransform));
+        SGLog(@"lock lyrics: motion track rejected file=%@ reason=preferred-transform transform={a=%.3f,b=%.3f,c=%.3f,d=%.3f,tx=%.3f,ty=%.3f}",
+              asset.URL.lastPathComponent,
+              track.preferredTransform.a,
+              track.preferredTransform.b,
+              track.preferredTransform.c,
+              track.preferredTransform.d,
+              track.preferredTransform.tx,
+              track.preferredTransform.ty);
         return nil;
     }
     // shortcut: a turned video (none seen among Canvases or Apple Music's covers) falls back to the blurred
