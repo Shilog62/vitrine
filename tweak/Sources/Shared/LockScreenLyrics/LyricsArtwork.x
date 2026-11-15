@@ -463,12 +463,19 @@ static NSTimeInterval update(void) {
                 sg_clipStartMs = position;
                 remaining = kClipGroupMilliseconds;
             }
-            offeredWait = (remaining + 1) / 1000.0;
             artworkID = [NSString stringWithFormat:@"%@-g%ld-%@", trackID, (long)segmentStartMs, look];
+            BOOL segmentAlreadyShown = [artworkID isEqualToString:sg_shownID];
+            offeredWait = ms > 0
+                ? MIN(ms, remaining) / 1000.0
+                : segmentAlreadyShown ? (remaining + 1) / 1000.0 : -1;
             offeredLine = segmentAt(lines, segmentStartMs, motion, sg_cover, style);
-            NSInteger nextStartMs = segmentStartMs + kClipGroupMilliseconds;
-            offeredLine.nextArtworkID = [NSString stringWithFormat:@"%@-g%ld-%@", trackID, (long)nextStartMs, look];
-            offeredLine.nextSegment = segmentAt(lines, nextStartMs, motion, sg_cover, style);
+            // Only prepare another segment while a later lyric state exists, or while the
+            // current segment is already on screen and must finish its six-second window.
+            if (ms > 0 || segmentAlreadyShown) {
+                NSInteger nextStartMs = segmentStartMs + kClipGroupMilliseconds;
+                offeredLine.nextArtworkID = [NSString stringWithFormat:@"%@-g%ld-%@", trackID, (long)nextStartMs, look];
+                offeredLine.nextSegment = segmentAt(lines, nextStartMs, motion, sg_cover, style);
+            }
         } else {
             sg_clipStartMs = -1;
             sg_clipMotionLook = nil;
