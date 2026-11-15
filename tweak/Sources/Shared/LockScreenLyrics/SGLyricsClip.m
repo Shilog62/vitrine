@@ -254,7 +254,7 @@ BOOL SGLyricsClipWrite(NSURL *file, CGImageRef backdrop, NSString *line, NSStrin
     [writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(written); }];
     dispatch_semaphore_wait(written, DISPATCH_TIME_FOREVER);
     if (writer.status != AVAssetWriterStatusCompleted) {
-        SGLog(@"lock lyrics: motion writer finish failed output=%@ status=%ld error=%@", file.lastPathComponent, (long)writer.status, writer.error ?: @"none");
+        SGLog(@"lock lyrics: still writer finish failed output=%@ status=%ld error=%@", file.lastPathComponent, (long)writer.status, writer.error ?: @"none");
         return NO;
     }
     [NSFileManager.defaultManager removeItemAtURL:file error:nil];
@@ -609,9 +609,16 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
     dispatch_semaphore_t written = dispatch_semaphore_create(0);
     [writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(written); }];
     dispatch_semaphore_wait(written, DISPATCH_TIME_FOREVER);
-    if (writer.status != AVAssetWriterStatusCompleted) return NO;
+    if (writer.status != AVAssetWriterStatusCompleted) {
+        SGLog(@"lock lyrics: motion writer finish failed output=%@ status=%ld error=%@", file.lastPathComponent, (long)writer.status, writer.error ?: @"none");
+        return NO;
+    }
     [NSFileManager.defaultManager removeItemAtURL:file error:nil];
-    return [NSFileManager.defaultManager moveItemAtURL:partial toURL:file error:nil];
+    NSError *moveError = nil;
+    BOOL moved = [NSFileManager.defaultManager moveItemAtURL:partial toURL:file error:&moveError];
+    NSDictionary *attributes = moved ? [NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil] : nil;
+    SGLog(@"lock lyrics: motion writer finished output=%@ moved=%@ bytes=%@ move-error=%@", file.lastPathComponent, moved ? @"YES" : @"NO", attributes[NSFileSize] ?: @0, moveError ?: @"none");
+    return moved;
 }
 
 NSString *SGLyricsClipLook(NSURL *motion, SGLyricsClipStyle style) {
