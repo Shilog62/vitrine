@@ -499,16 +499,18 @@ static BOOL eachFrame(AVURLAsset *asset, AVAssetTrack *track, Motion motion, dou
 
 // Diagnostic-only check of the finished MP4. Sample narrow strips at the left and right edges,
 // outside the centered lyric column, so moving glyphs cannot masquerade as Canvas motion.
-static const size_t kMotionDiagnosticWidth = 48;
-static const size_t kMotionDiagnosticHeight = 64;
-static const size_t kMotionDiagnosticChannels = 3;
-static const size_t kMotionDiagnosticCapacity =
-    kMotionDiagnosticWidth * kMotionDiagnosticHeight * kMotionDiagnosticChannels;
+enum {
+    kMotionDiagnosticWidth = 48,
+    kMotionDiagnosticHeight = 64,
+    kMotionDiagnosticChannels = 3,
+    kMotionDiagnosticCapacity = kMotionDiagnosticWidth * kMotionDiagnosticHeight * kMotionDiagnosticChannels,
+};
 
 static size_t copyMotionDiagnosticPixels(CGImageRef image, uint8_t *samples, size_t capacity) {
     if (!image || !samples || capacity < kMotionDiagnosticCapacity) return 0;
     uint8_t pixels[kMotionDiagnosticWidth * kMotionDiagnosticHeight * 4] = {0};
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    if (!space) return 0;
     CGContextRef context = CGBitmapContextCreate(pixels, kMotionDiagnosticWidth, kMotionDiagnosticHeight, 8,
         kMotionDiagnosticWidth * 4, space, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
     CGColorSpaceRelease(space);
