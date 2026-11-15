@@ -1,8 +1,10 @@
-// A line of lyrics as a short video for the lock screen's full-screen artwork (LyricsArtwork.x): the
-// line, and the next one dimmed under it, over the cover blurred or over the moving artwork. Core Graphics, Core Text, Core Image
-// and AVFoundation only, so harness/lyrics-clip renders the same files on the Mac.
+// Lyrics rendered into short videos for the lock screen's full-screen artwork (LyricsArtwork.x).
+// Moving artwork can contain several timed lyric states in one continuous segment. Core Graphics,
+// Core Text, Core Image and AVFoundation only, so harness/lyrics-clip renders the same files on the Mac.
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
+
+@class SGKaraokeLine;
 
 typedef NS_ENUM(NSInteger, SGLyricsClipStyle) {
     SGLyricsClipStill = 0,   // one frame, held
@@ -26,6 +28,13 @@ BOOL SGLyricsClipWrite(NSURL *file, CGImageRef backdrop, NSString *line, NSStrin
 // one that does not read. Blocks, so never on the main queue.
 BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motion, NSString *previous, NSString *line, NSString *next,
                                  double from, double seconds);
+// Preview and video for a continuous moving-artwork segment, following all timed lyric states
+// between fromMs and fromMs + seconds. The preview is the first frame of that segment.
+CGImageRef SGLyricsClipMotionFrameForLines(NSURL *motion, NSArray<SGKaraokeLine *> *lines,
+                                           NSInteger fromMs) CF_RETURNS_RETAINED;
+BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motion, NSArray<SGKaraokeLine *> *lines,
+                                         NSInteger fromMs, double seconds);
+
 // The end of a line's artwork ID, so a clip kept under it is the one wanted: the style, which a clip falling
 // back to the cover is drawn in, and with moving artwork m and the first 16 characters of its file's name (the
 // store names files by a SHA-1 of their address), so another video for the track redraws the line showing.
