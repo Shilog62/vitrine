@@ -253,9 +253,16 @@ BOOL SGLyricsClipWrite(NSURL *file, CGImageRef backdrop, NSString *line, NSStrin
     dispatch_semaphore_t written = dispatch_semaphore_create(0);
     [writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(written); }];
     dispatch_semaphore_wait(written, DISPATCH_TIME_FOREVER);
-    if (writer.status != AVAssetWriterStatusCompleted) return NO;
+    if (writer.status != AVAssetWriterStatusCompleted) {
+        SGLog(@"lock lyrics: motion writer finish failed output=%@ status=%ld error=%@", file.lastPathComponent, (long)writer.status, writer.error ?: @"none");
+        return NO;
+    }
     [NSFileManager.defaultManager removeItemAtURL:file error:nil];
-    return [NSFileManager.defaultManager moveItemAtURL:partial toURL:file error:nil];
+    NSError *moveError = nil;
+    BOOL moved = [NSFileManager.defaultManager moveItemAtURL:partial toURL:file error:&moveError];
+    NSDictionary *attributes = moved ? [NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil] : nil;
+    SGLog(@"lock lyrics: motion writer finished output=%@ moved=%@ bytes=%@ move-error=%@", file.lastPathComponent, moved ? @"YES" : @"NO", attributes[NSFileSize] ?: @0, moveError ?: @"none");
+    return moved;
 }
 
 // Over moving artwork. The video is read as BGRA, the dimming and the words are drawn into each frame where
@@ -271,18 +278,31 @@ typedef struct {
 static AVAssetTrack *motionTrack(AVURLAsset *asset, Motion *motion) {
     __block AVAssetTrack *track = nil;
     dispatch_semaphore_t loaded = dispatch_semaphore_create(0);
+    __block NSError *trackError = nil;
     [asset loadTracksWithMediaType:AVMediaTypeVideo completionHandler:^(NSArray<AVAssetTrack *> *tracks, NSError *error) {
         track = tracks.firstObject;
+        trackError = error;
         dispatch_semaphore_signal(loaded);
     }];
     dispatch_semaphore_wait(loaded, DISPATCH_TIME_FOREVER);
+    if (!track) {
+        SGLog(@"lock lyrics: motion track load failed file=%@ error=%@", asset.URL.lastPathComponent, trackError ?: @"no video track");
+        return nil;
+    }
+    if (!CGAffineTransformIsIdentity(track.preferredTransform)) {
+        SGLog(@"lock lyrics: motion track rejected file=%@ reason=preferred-transform transform=%@", asset.URL.lastPathComponent, NSStringFromCGAffineTransform(track.preferredTransform));
+        return nil;
+    }
     // shortcut: a turned video (none seen among Canvases or Apple Music's covers) falls back to the blurred
     // cover; drawing the words turned with it is the step up if one turns up.
     if (!track || !CGAffineTransformIsIdentity(track.preferredTransform)) return nil;
     // Whole pixels: the decoded frames are, and drawOver checks each against this.
     CGSize stored = CGSizeMake(round(track.naturalSize.width), round(track.naturalSize.height));
     double length = CMTimeGetSeconds(track.timeRange.duration);
-    if (stored.width < 16 || stored.height < 16 || !(length > 0)) return nil;
+    if (stored.width < 16 || stored.height < 16 || !(length > 0)) {
+        SGLog(@"lock lyrics: motion track rejected file=%@ size=%.0fx%.0f duration=%.3f", asset.URL.lastPathComponent, stored.width, stored.height, length);
+        return nil;
+    }
     CGSize cut = stored.width / stored.height > 0.75 ? CGSizeMake(stored.height * 0.75, stored.height)
                                                      : CGSizeMake(stored.width, stored.width / 0.75);
     // H.264 takes even sides, rounded down so the cut stays inside the picture.
@@ -420,10 +440,21 @@ static BOOL eachFrame(AVURLAsset *asset, AVAssetTrack *track, Motion motion, dou
         }];
         // Copies, so drawing into one never touches a frame the decoder still refers to.
         output.alwaysCopiesSampleData = YES;
-        if (!reader || ![reader canAddOutput:output]) return NO;
+        if (!reader) {
+            SGLog(@"lock lyrics: frame reader creation failed file=%@ at=%.3f", asset.URL.lastPathComponent, at);
+            return NO;
+        }
+        if (![reader canAddOutput:output]) {
+            SGLog(@"lock lyrics: frame reader cannot add output file=%@ status=%ld error=%@", asset.URL.lastPathComponent, (long)reader.status, reader.error ?: @"none");
+            return NO;
+        }
         [reader addOutput:output];
         reader.timeRange = CMTimeRangeMake(CMTimeMakeWithSeconds(at, scale), CMTimeMakeWithSeconds(take, scale));
-        if (![reader startReading]) return NO;
+        if (![reader startReading]) {
+            SGLog(@"lock lyrics: frame reader start failed file=%@ at=%.3f take=%.3f status=%ld error=%@", asset.URL.lastPathComponent, at, take, (long)reader.status, reader.error ?: @"none");
+            return NO;
+        }
+        NSUInteger segmentFrames = 0;
         CMSampleBufferRef sample;
         while ((sample = [output copyNextSampleBuffer])) {
             // The first frame may start before `at`; it shows from the start of this stretch.
@@ -437,6 +468,7 @@ static BOOL eachFrame(AVURLAsset *asset, AVAssetTrack *track, Motion motion, dou
             if (!keep) continue;
             // A jump in the video (its loop) starts the schedule again rather than keeping a burst of frames.
             due = due + 1.0 / kMotionFPS < CMTimeGetSeconds(time) ? CMTimeGetSeconds(time) + 0.5 / kMotionFPS : due + 1.0 / kMotionFPS;
+            segmentFrames++;
             BOOL more = each(timed);
             CFRelease(timed);
             if (!more) {
@@ -444,7 +476,14 @@ static BOOL eachFrame(AVURLAsset *asset, AVAssetTrack *track, Motion motion, dou
                 return YES;
             }
         }
-        if (reader.status != AVAssetReaderStatusCompleted) return NO;
+        if (reader.status != AVAssetReaderStatusCompleted) {
+            SGLog(@"lock lyrics: frame reader ended abnormally file=%@ at=%.3f take=%.3f frames=%lu status=%ld error=%@", asset.URL.lastPathComponent, at, take, (unsigned long)segmentFrames, (long)reader.status, reader.error ?: @"none");
+            return NO;
+        }
+        if (segmentFrames == 0) {
+            SGLog(@"lock lyrics: frame reader produced no usable frames file=%@ at=%.3f take=%.3f", asset.URL.lastPathComponent, at, take);
+            return NO;
+        }
         done += take;
         at = 0;
     }
@@ -497,11 +536,24 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
         // As SGMotionClip.m's cut: about 2 Mbit/s at a Canvas's 720 x 960.
         AVVideoCompressionPropertiesKey: @{AVVideoAverageBitRateKey: @(motion.cut.width * motion.cut.height * 3)},
     }];
-    if (!writer || ![writer canAddInput:input]) return NO;
+    if (!writer) {
+        SGLog(@"lock lyrics: motion writer creation failed output=%@ error=%@", file.lastPathComponent, writer.error ?: @"none");
+        return NO;
+    }
+    if (![writer canAddInput:input]) {
+        SGLog(@"lock lyrics: motion writer cannot add input output=%@ status=%ld error=%@", file.lastPathComponent, (long)writer.status, writer.error ?: @"none");
+        return NO;
+    }
     [writer addInput:input];
-    if (![writer startWriting]) return NO;
+    if (![writer startWriting]) {
+        SGLog(@"lock lyrics: motion writer start failed output=%@ status=%ld error=%@", file.lastPathComponent, (long)writer.status, writer.error ?: @"none");
+        return NO;
+    }
     [writer startSessionAtSourceTime:kCMTimeZero];
     Over over = makeOver(motion, previous, line, next);
+    if (!over.keep || (line.length && !over.words)) {
+        SGLog(@"lock lyrics: overlay preparation incomplete output=%@ keep=%@ words=%@ line=%lu next=%lu", file.lastPathComponent, over.keep ? @"YES" : @"NO", over.words ? @"YES" : @"NO", (unsigned long)line.length, (unsigned long)next.length);
+    }
     // Mirror the existing timing calculation for diagnostics; the frame-writing path below keeps its own
     // original calculation so this instrumentation does not change how a frame is drawn.
     double loggedLyricDuration = MAX(seconds - 1.0, 0);
@@ -530,7 +582,9 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
         double lyricDuration = MAX(seconds - 1.0, 0);
         double scrollDuration = longLineClip ? 0 : MIN(0.45, lyricDuration);
         double scrollStart = MAX(lyricDuration - scrollDuration, 0);
-        if (!drawOver(CMSampleBufferGetImageBuffer(sample), motion, over, elapsed, scrollStart, scrollDuration)) {
+        CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sample);
+        if (!drawOver(pixelBuffer, motion, over, elapsed, scrollStart, scrollDuration)) {
+            SGLog(@"lock lyrics: overlay draw failed output=%@ frame=%lu pts=%.3f size=%zux%zu format=%u planar=%@ base=%@", file.lastPathComponent, (unsigned long)frameCount, elapsed, CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer), (unsigned int)CVPixelBufferGetPixelFormatType(pixelBuffer), CVPixelBufferIsPlanar(pixelBuffer) ? @"YES" : @"NO", CVPixelBufferGetBaseAddress(pixelBuffer) ? @"YES" : @"NO");
             ok = NO;
             return NO;
         }
@@ -538,6 +592,7 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
         ok = writer.status == AVAssetWriterStatusWriting && [input appendSampleBuffer:sample];
         any = YES;
         if (ok) frameCount++;
+        else SGLog(@"lock lyrics: motion writer append failed output=%@ frame=%lu pts=%.3f status=%ld error=%@", file.lastPathComponent, (unsigned long)frameCount, elapsed, (long)writer.status, writer.error ?: @"not-writing");
         return ok;
     });
     freeOver(over);
@@ -545,6 +600,7 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
           file.lastPathComponent, read ? @"YES" : @"NO", ok ? @"YES" : @"NO", (unsigned long)frameCount,
           firstProgressAt, lastElapsed, lastProgress);
     if (!read || !ok || !any) {
+        SGLog(@"lock lyrics: motion encode aborted output=%@ read=%@ append=%@ any=%@ frames=%lu writer-status=%ld reader-error-or-state=%@", file.lastPathComponent, read ? @"YES" : @"NO", ok ? @"YES" : @"NO", any ? @"YES" : @"NO", (unsigned long)frameCount, (long)writer.status, writer.error ?: @"see frame-reader log");
         [writer cancelWriting];
         return NO;
     }
