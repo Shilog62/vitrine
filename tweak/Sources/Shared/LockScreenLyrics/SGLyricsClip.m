@@ -348,7 +348,7 @@ static void freeOver(Over over) {
 // the words blurred (Accelerate's tent blur) and faded in, every row of the cut darkened by its share in one
 // pass, and one image the size of the words. All on the CPU. NO, with the frame left as it is, for a frame of
 // another size or format than the track states, so the clip is not written without its words.
-static BOOL drawOver(CVPixelBufferRef buffer, Motion motion, Over over, double elapsed, double scrollDuration) {
+static BOOL drawOver(CVPixelBufferRef buffer, Motion motion, Over over, double elapsed, double scrollStart, double scrollDuration) {
     CVPixelBufferLockBaseAddress(buffer, 0);
     uint8_t *base = CVPixelBufferGetBaseAddress(buffer);
     size_t bytesPerRow = CVPixelBufferGetBytesPerRow(buffer);
@@ -393,7 +393,7 @@ static BOOL drawOver(CVPixelBufferRef buffer, Motion motion, Over over, double e
         CGContextRef context = newContext(motion.stored, base, bytesPerRow);
         // Smoothly move the next lyric into the sung line's place. The final second of the clip
         // is held still so the lock screen can replace this artwork at the lyric boundary.
-        double t = scrollDuration > 0 ? MIN(MAX(elapsed / scrollDuration, 0), 1) : 0;
+        double t = scrollDuration > 0 ? MIN(MAX((elapsed - scrollStart) / scrollDuration, 0), 1) : 0;
         CGFloat progress = (CGFloat)(t * t * (3 - 2 * t));
         CGRect destination = CGRectOffset(over.drawn, cut.origin.x, cut.origin.y + over.scrollDistance * progress);
         CGContextDrawImage(context, destination, over.words);
@@ -459,7 +459,7 @@ CGImageRef SGLyricsClipMotionFrame(NSURL *motionFile, NSString *previous, NSStri
     __block CGImageRef frame = NULL;
     eachFrame(asset, track, motion, from, motion.length, ^BOOL(CMSampleBufferRef sample) {
         CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sample);
-        if (!drawOver(buffer, motion, over, 0, 0)) return NO;
+        if (!drawOver(buffer, motion, over, 0, 0, 0)) return NO;
         CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
         CGContextRef context = newContext(motion.stored, CVPixelBufferGetBaseAddress(buffer), CVPixelBufferGetBytesPerRow(buffer));
         CGImageRef whole = CGBitmapContextCreateImage(context);
@@ -500,10 +500,13 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
     __block BOOL ok = YES, any = NO;
     BOOL read = eachFrame(asset, track, motion, from, seconds, ^BOOL(CMSampleBufferRef sample) {
         double elapsed = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample));
-        // Eight-second clips can loop before an unusually long lyric changes. Keep those stationary
-        // rather than letting a completed scroll visibly jump back to its starting position.
-        double scrollDuration = seconds < 7.99 ? MAX(seconds - 1, 0.1) : 0;
-        if (!drawOver(CMSampleBufferGetImageBuffer(sample), motion, over, elapsed, scrollDuration)) {
+        // Keep the lyric still for most of its line, then move it into the next line's place
+        // just before the artwork changes. The final second is the existing hand-off allowance.
+        // Eight-second clips may loop before a long line changes, so leave those stationary.
+        double lyricDuration = MAX(seconds - 1.0, 0);
+        double scrollDuration = seconds < 7.99 ? MIN(0.45, lyricDuration) : 0;
+        double scrollStart = MAX(lyricDuration - scrollDuration, 0);
+        if (!drawOver(CMSampleBufferGetImageBuffer(sample), motion, over, elapsed, scrollStart, scrollDuration)) {
             ok = NO;
             return NO;
         }
