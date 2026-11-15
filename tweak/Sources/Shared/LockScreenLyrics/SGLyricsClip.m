@@ -262,8 +262,6 @@ BOOL SGLyricsClipWrite(NSURL *file, CGImageRef backdrop, NSString *line, NSStrin
     BOOL moved = [NSFileManager.defaultManager moveItemAtURL:partial toURL:file error:&moveError];
     NSDictionary *attributes = moved ? [NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil] : nil;
     SGLog(@"lock lyrics: motion writer finished output=%@ moved=%@ bytes=%@ move-error=%@", file.lastPathComponent, moved ? @"YES" : @"NO", attributes[NSFileSize] ?: @0, moveError ?: @"none");
-    // Read back only the first three completed clips in this process; the check never affects success.
-    if (moved && takeEncodedMotionDiagnosticSlot()) logEncodedMotionSamples(file, seconds);
     return moved;
 }
 
@@ -577,7 +575,8 @@ static void logEncodedMotionSamples(NSURL *file, double seconds) {
         for (size_t i = 0; i < counts[0]; i += 3) {
             int largest = 0;
             for (size_t channel = 0; channel < 3; channel++) {
-                int difference = abs((int)samples[pair][i + channel] - (int)samples[pair + 1][i + channel]);
+                int difference = (int)samples[pair][i + channel] - (int)samples[pair + 1][i + channel];
+                if (difference < 0) difference = -difference;
                 total += (uint64_t)difference;
                 largest = MAX(largest, difference);
             }
@@ -731,6 +730,8 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
     BOOL moved = [NSFileManager.defaultManager moveItemAtURL:partial toURL:file error:&moveError];
     NSDictionary *attributes = moved ? [NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil] : nil;
     SGLog(@"lock lyrics: motion writer finished output=%@ moved=%@ bytes=%@ move-error=%@", file.lastPathComponent, moved ? @"YES" : @"NO", attributes[NSFileSize] ?: @0, moveError ?: @"none");
+    // Read back only the first three completed moving-artwork clips; the check never affects success.
+    if (moved && takeEncodedMotionDiagnosticSlot()) logEncodedMotionSamples(file, seconds);
     return moved;
 }
 
