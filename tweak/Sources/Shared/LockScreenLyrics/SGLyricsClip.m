@@ -515,7 +515,9 @@ typedef struct {
     NSInteger index;
     BOOL resting;
     NSInteger startMs, endMs;
-    BOOL scroll;
+    NSInteger nextIndex;
+    BOOL hasTransition, scroll;
+    NSUInteger scrollDiagnosticMask; // begin, midpoint and end samples logged while encoding
     Over over;
 } SGLyricsTimedOverlay;
 
@@ -603,6 +605,8 @@ static BOOL lyricsClipPrepareOverlays(Motion motion, NSArray<SGKaraokeLine *> *l
             .resting = state.resting,
             .startMs = cursor,
             .endMs = stateEndMs,
+            .nextIndex = hasTransition ? nextState.index : -1,
+            .hasTransition = hasTransition,
             .scroll = scroll,
             .over = over,
         };
@@ -721,6 +725,17 @@ BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray
         [writer cancelWriting];
         return NO;
     }
+    for (NSUInteger i = 0; i < overlayCount; i++) {
+        SGLyricsTimedOverlay *overlay = &overlays[i];
+        double scrollStart = 0, scrollDuration = 0;
+        lyricsClipScrollTiming(overlay, fromMs, &scrollStart, &scrollDuration);
+        SGLog(@"lock lyrics: grouped scroll plan output=%@ line=%ld next-line=%ld transition=%@ resting=%@ song-range=%.3f..%.3f scroll=%@ distance=%.2f start=%.3f duration=%.3f",
+              file.lastPathComponent, (long)overlay->index, (long)overlay->nextIndex,
+              overlay->hasTransition ? @"YES" : @"NO", overlay->resting ? @"YES" : @"NO",
+              overlay->startMs / 1000.0, overlay->endMs / 1000.0,
+              overlay->scroll ? @"YES" : @"NO", overlay->over.scrollDistance,
+              scrollStart, scrollDuration);
+    }
     SGLog(@"lock lyrics: grouped clip plan %@ from=%.3f seconds=%.3f states=%lu",
           file.lastPathComponent, fromMs / 1000.0, seconds, (unsigned long)overlayCount);
 
@@ -732,6 +747,30 @@ BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray
         SGLyricsTimedOverlay *overlay = lyricsClipOverlayAt(overlays, overlayCount, lines, positionMs);
         double scrollStart = 0, scrollDuration = 0;
         lyricsClipScrollTiming(overlay, fromMs, &scrollStart, &scrollDuration);
+        // Record representative frames only; the drawing path and its timing remain unchanged.
+        if (overlay && overlay->scroll && scrollDuration > 0 && elapsed >= scrollStart) {
+            double phase = MIN(MAX((elapsed - scrollStart) / scrollDuration, 0), 1);
+            NSUInteger bit = 0;
+            const char *sampleName = NULL;
+            if (phase <= 0.10) {
+                bit = 1;
+                sampleName = "begin";
+            } else if (phase >= 0.45 && phase <= 0.55) {
+                bit = 2;
+                sampleName = "middle";
+            } else if (phase >= 0.90) {
+                bit = 4;
+                sampleName = "end";
+            }
+            if (bit && !(overlay->scrollDiagnosticMask & bit)) {
+                overlay->scrollDiagnosticMask |= bit;
+                double eased = phase * phase * (3 - 2 * phase);
+                SGLog(@"lock lyrics: grouped scroll sample output=%@ line=%ld next-line=%ld sample=%s elapsed=%.3f phase=%.3f distance=%.2f offset=%.2f",
+                      file.lastPathComponent, (long)overlay->index, (long)overlay->nextIndex,
+                      sampleName, elapsed, phase, overlay->over.scrollDistance,
+                      overlay->over.scrollDistance * eased);
+            }
+        }
         CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sample);
         if (!overlay || !drawOver(buffer, motion, overlay->over, elapsed, scrollStart, scrollDuration)) {
             SGLog(@"lock lyrics: grouped overlay draw failed output=%@ frame=%lu position=%ld",
