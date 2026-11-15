@@ -4,6 +4,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <CoreImage/CoreImage.h>
 #import <CoreText/CoreText.h>
+#import "Core/SGLog.h"
 #import "SGLyricsClip.h"
 
 // The lock screen fills the screen with a 3:4 clip, so a phone's taller screen cuts its sides off: the
@@ -497,25 +498,43 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
     if (![writer startWriting]) return NO;
     [writer startSessionAtSourceTime:kCMTimeZero];
     Over over = makeOver(motion, previous, line, next);
+    // Keep the existing timing calculation unchanged; record why this clip will or will not scroll.
+    double lyricDuration = MAX(seconds - 1.0, 0);
+    double scrollDuration = seconds < 7.99 ? MIN(0.45, lyricDuration) : 0;
+    double scrollStart = MAX(lyricDuration - scrollDuration, 0);
+    NSString *scrollReason = !line.length ? @"no-current-line"
+        : !next.length ? @"no-next-line"
+        : over.scrollDistance <= 0 ? @"no-next-baseline"
+        : scrollDuration <= 0 ? (seconds >= 7.99 ? @"eight-second-clip" : @"no-scroll-window")
+        : @"scheduled";
+    SGLog(@"lock lyrics: scroll plan %@: seconds=%.3f from=%.3f motion=%.3f current=%@ next=%@ distance=%.2f start=%.3f duration=%.3f reason=%@",
+          file.lastPathComponent, seconds, from, motion.length, line.length ? @"YES" : @"NO",
+          next.length ? @"YES" : @"NO", over.scrollDistance, scrollStart, scrollDuration, scrollReason);
     __block BOOL ok = YES, any = NO;
+    __block NSUInteger frameCount = 0;
+    __block double firstProgressAt = -1, lastElapsed = -1, lastProgress = 0;
     BOOL read = eachFrame(asset, track, motion, from, seconds, ^BOOL(CMSampleBufferRef sample) {
         double elapsed = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample));
-        // Keep the lyric still for most of its line, then move it into the next line's place
-        // just before the artwork changes. The final second is the existing hand-off allowance.
-        // Eight-second clips may loop before a long line changes, so leave those stationary.
-        double lyricDuration = MAX(seconds - 1.0, 0);
-        double scrollDuration = seconds < 7.99 ? MIN(0.45, lyricDuration) : 0;
-        double scrollStart = MAX(lyricDuration - scrollDuration, 0);
+        double progress = scrollDuration > 0 ? MIN(MAX((elapsed - scrollStart) / scrollDuration, 0), 1) : 0;
+        if (progress > 0 && firstProgressAt < 0) firstProgressAt = elapsed;
+        lastElapsed = elapsed;
+        lastProgress = progress;
         if (!drawOver(CMSampleBufferGetImageBuffer(sample), motion, over, elapsed, scrollStart, scrollDuration)) {
             ok = NO;
             return NO;
         }
         while (!input.readyForMoreMediaData && writer.status == AVAssetWriterStatusWriting) [NSThread sleepForTimeInterval:0.002];
         ok = writer.status == AVAssetWriterStatusWriting && [input appendSampleBuffer:sample];
-        any = YES;
+        if (ok) {
+            any = YES;
+            frameCount++;
+        }
         return ok;
     });
     freeOver(over);
+    SGLog(@"lock lyrics: scroll output %@: read=%@ writer=%@ frames=%lu first-progress=%.3f last-pts=%.3f last-progress=%.3f",
+          file.lastPathComponent, read ? @"YES" : @"NO", ok ? @"YES" : @"NO", (unsigned long)frameCount,
+          firstProgressAt, lastElapsed, lastProgress);
     if (!read || !ok || !any) {
         [writer cancelWriting];
         return NO;
