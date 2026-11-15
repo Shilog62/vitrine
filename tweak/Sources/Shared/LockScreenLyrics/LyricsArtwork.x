@@ -171,11 +171,21 @@ static BOOL writeClip(NSString *artworkID, SGLockLine *line, CGSize size) {
 
 // The next line's preview and clip, drawn while this one shows: a line change then hands both over at once, where
 // drawing them on request left the lock screen on the plain cover for half a second.
-static void drawAhead(NSString *artworkID, SGLockLine *line) {
+static void drawAhead(NSString *currentArtworkID, NSString *artworkID, SGLockLine *line) {
     CFAbsoluteTime time = CFAbsoluteTimeGetCurrent();
     CGSize size = SGLyricsClipSize(SGMotionPixels());
     if (time - sg_previewAskedAt <= 15) dispatch_async(sg_previewQueue, ^{ previewFor(artworkID, line, size); });
-    if (time - sg_askedAt <= 15) dispatch_async(sg_queue, ^{ writeClip(artworkID, line, size); });
+    if (time - sg_askedAt <= 15) {
+        // Let the lock screen enqueue the current line's URL request before this lower-priority
+        // prefetch. The current clip must not wait behind the next line's clip on sg_queue.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), sg_queue, ^{
+            if (!stillShown(currentArtworkID)) {
+                SGLog(@"lock lyrics: ahead clip %@ skipped: current artwork %@ is no longer shown", artworkID, currentArtworkID);
+                return;
+            }
+            writeClip(artworkID, line, size);
+        });
+    }
 }
 
 API_AVAILABLE(ios(26.0))
@@ -213,6 +223,13 @@ static MPMediaItemAnimatedArtwork *artworkFor(NSString *artworkID, SGLockLine *l
                     return;
                 }
                 BOOL written = writeClip(artworkID, line, size);
+                // A clip can take long enough to finish after playback has moved to another lyric.
+                // Never hand an obsolete artwork's URL back to the lock screen.
+                if (!stillShown(artworkID)) {
+                    SGLog(@"lock lyrics: VIDEO URL for %@ rejected after writing: artwork is no longer shown", artworkID);
+                    completion(nil);
+                    return;
+                }
                 NSURL *result = written ? clipFile(artworkID) : nil;
                 NSNumber *bytes = nil;
                 BOOL exists = result && [NSFileManager.defaultManager fileExistsAtPath:result.path];
@@ -384,7 +401,7 @@ static NSTimeInterval update(void) {
                               state.track.trackTitle);
         if (index + 1 < (NSInteger)lines.count) {
             NSString *ahead = [NSString stringWithFormat:@"%@-%ld-%@", trackID, (long)index + 1, look];
-            drawAhead(ahead, lineAt(lines, index + 1, NO, motion, sg_cover, style));
+            drawAhead(artworkID, ahead, lineAt(lines, index + 1, NO, motion, sg_cover, style));
         }
         return wait;
     }
