@@ -263,6 +263,47 @@ static SGLockLine *lineAt(NSArray<SGKaraokeLine *> *lines, NSInteger index, BOOL
     return shown;
 }
 
+// The lock screen artwork ID changes only when the lead line or its resting state changes.
+// Keep this definition in one place so the timer and the artwork it offers agree exactly.
+typedef struct {
+    NSInteger index;
+    BOOL resting;
+} SGLyricsDisplayState;
+
+static SGLyricsDisplayState displayStateAt(NSArray<SGKaraokeLine *> *lines, NSInteger position) {
+    SGLyricsDisplayState state;
+    state.index = SGKaraokeLeadLine(lines, position);
+    BOOL nextFarOff = state.index + 1 >= (NSInteger)lines.count
+        || lines[(NSUInteger)(state.index + 1)].start - position > SGKaraokeBreakMs;
+    state.resting = state.index < 0
+        || (position > SGKaraokeSungEnd(lines[(NSUInteger)state.index]) + SGKaraokeBreakMs && nextFarOff);
+    return state;
+}
+
+// SGKaraokeMsToChange also reports timing events that do not change the lock screen's artwork
+// (for example, a new overlapping line that has not become the lead line yet). Walk those events
+// until the actual artwork state changes, and return the distance from the original position.
+static NSInteger msToDisplayChange(NSArray<SGKaraokeLine *> *lines, NSInteger position, NSUInteger *checked) {
+    SGLyricsDisplayState initial = displayStateAt(lines, position);
+    NSInteger cursor = position;
+    NSUInteger count = 0;
+    while (YES) {
+        NSInteger delta = SGKaraokeMsToChange(lines, cursor, -1);
+        if (delta <= 0) break;
+        NSInteger candidate = cursor + delta;
+        if (candidate <= cursor) break; // guard against integer overflow
+        count++;
+        SGLyricsDisplayState next = displayStateAt(lines, candidate);
+        if (next.index != initial.index || next.resting != initial.resting) {
+            if (checked) *checked = count;
+            return candidate - position;
+        }
+        cursor = candidate;
+    }
+    if (checked) *checked = count;
+    return -1;
+}
+
 // Offers the artwork for where the song is, and says in how many seconds of the song's time to look again:
 // kTick while it cannot be worked out yet, negative for not until something else changes. Past a line's sung
 // end by SGKaraokeBreakMs, with the next line at least that far off, the line rests: it is let go and only the
@@ -301,12 +342,13 @@ static NSTimeInterval update(void) {
         NSInteger position = SGKaraokePositionMs();
         if (position < 0) return kTick;
         position -= SGKaraokeDelayMs();
-        NSInteger index = SGKaraokeLeadLine(lines, position);
-        NSInteger ms = SGKaraokeMsToChange(lines, position, -1);
+        SGLyricsDisplayState display = displayStateAt(lines, position);
+        NSInteger index = display.index;
+        BOOL resting = display.resting;
+        NSUInteger checked = 0;
+        NSInteger ms = msToDisplayChange(lines, position, &checked);
         // A ms on, past the truncation of the position.
         NSTimeInterval wait = ms > 0 ? (ms + 1) / 1000.0 : -1;
-        BOOL nextFarOff = index + 1 == (NSInteger)lines.count || lines[index + 1].start - position > SGKaraokeBreakMs;
-        BOOL resting = index < 0 || (position > SGKaraokeSungEnd(lines[index]) + SGKaraokeBreakMs && nextFarOff);
         SGLyricsClipStyle style = (SGLyricsClipStyle)SGInt(SGKeyLockScreenLyricsStyle, SGLyricsClipStill);
         NSURL *motion = SGLockScreenArtwork() == SGLockArtworkMotionLyrics && [sg_motionURI isEqualToString:SGURIString(state.track.URI)]
             ? sg_motion : nil;
@@ -332,6 +374,9 @@ static NSTimeInterval update(void) {
         }
         if (![sg_shownID hasPrefix:trackID]) SGLog(@"lock lyrics: lines offered for %@", trackID);
         if (motion && ![sg_shownID hasSuffix:[@"-" stringByAppendingString:look]]) SGLog(@"lock lyrics: the lines of %@ over %@", trackID, motion.lastPathComponent);
+        SGLog(@"lock lyrics: display state %@ index=%ld resting=%@ position=%ld next-change-in=%@ events-checked=%lu",
+              trackID, (long)index, resting ? @"YES" : @"NO", (long)position,
+              ms > 0 ? [NSString stringWithFormat:@"%ld ms", (long)ms] : @"none", (unsigned long)checked);
         setShown(artworkID);
         SGLockMotionShowPlain(NO);
         SGNowPlayingSetExtras(@"lyrics", @{MPNowPlayingInfoProperty3x4AnimatedArtwork:
