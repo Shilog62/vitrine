@@ -384,7 +384,7 @@ static SGKaraokeLine *fromSpotifySyllableLine(NSDictionary *source) {
         NSDictionary *syllable = value;
         NSInteger count = spotifyJSONTime(syllable[@"numChars"], 0);
         NSInteger start = spotifyJSONTime(syllable[@"startTimeMs"], -1);
-        NSInteger end = spotifyJSONTime(syllable[@"endTimeMs"], -1);
+        NSInteger end = spotifyJSONTime(syllable[@"endTimeMs"], start);
         if (count <= 0 || start < 0 || end < start) return nil;
 
         BOOL spaceBefore = NO;
@@ -428,7 +428,7 @@ static NSArray<SGKaraokeLine *> *fromSpotifySyllableLines(NSArray *sourceLines) 
         if (![value isKindOfClass:NSDictionary.class]) continue;
         NSDictionary *source = value;
         id rawText = source[@"words"];
-        if (![rawText isKindOfClass:NSString.class] || ![(NSString *)rawText length]) continue;
+        if (![rawText isKindOfClass:NSString.class] || ![(NSString *)rawText length] || isBreak(rawText)) continue;
         NSInteger start = spotifyJSONTime(source[@"startTimeMs"], -1);
         if (start < 0) {
             NSArray *syllables = [source[@"syllables"] isKindOfClass:NSArray.class] ? source[@"syllables"] : nil;
