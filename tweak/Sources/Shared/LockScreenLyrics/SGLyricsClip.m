@@ -480,6 +480,10 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
     Motion motion;
     AVAssetTrack *track = motionTrack(asset, &motion);
     if (!track) return NO;
+    // Remember whether the song's lyric interval hit the eight-second cap before the
+    // Canvas duration shortened the clip. A shorter Canvas must not re-enable scrolling.
+    BOOL longLineClip = seconds >= 7.99;
+    double requestedSeconds = seconds;
     // No longer than the video, which is then written whole and loops as it was made to.
     seconds = MIN(seconds, motion.length);
     NSURL *partial = [file URLByAppendingPathExtension:@"partial"];
@@ -501,15 +505,15 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
     // Mirror the existing timing calculation for diagnostics; the frame-writing path below keeps its own
     // original calculation so this instrumentation does not change how a frame is drawn.
     double loggedLyricDuration = MAX(seconds - 1.0, 0);
-    double loggedScrollDuration = seconds < 7.99 ? MIN(0.45, loggedLyricDuration) : 0;
+    double loggedScrollDuration = longLineClip ? 0 : MIN(0.45, loggedLyricDuration);
     double loggedScrollStart = MAX(loggedLyricDuration - loggedScrollDuration, 0);
     NSString *scrollReason = !line.length ? @"no-current-line"
         : !next.length ? @"no-next-line"
         : over.scrollDistance <= 0 ? @"no-next-baseline"
-        : loggedScrollDuration <= 0 ? (seconds >= 7.99 ? @"eight-second-clip" : @"no-scroll-window")
+        : loggedScrollDuration <= 0 ? (longLineClip ? @"eight-second-clip" : @"no-scroll-window")
         : @"scheduled";
-    SGLog(@"lock lyrics: scroll plan %@: seconds=%.3f from=%.3f motion=%.3f current=%@ next=%@ distance=%.2f start=%.3f duration=%.3f reason=%@",
-          file.lastPathComponent, seconds, from, motion.length, line.length ? @"YES" : @"NO",
+    SGLog(@"lock lyrics: scroll plan %@: seconds=%.3f requested=%.3f from=%.3f motion=%.3f current=%@ next=%@ distance=%.2f start=%.3f duration=%.3f reason=%@",
+          file.lastPathComponent, seconds, requestedSeconds, from, motion.length, line.length ? @"YES" : @"NO",
           next.length ? @"YES" : @"NO", over.scrollDistance, loggedScrollStart, loggedScrollDuration, scrollReason);
     __block BOOL ok = YES, any = NO;
     __block NSUInteger frameCount = 0;
@@ -524,7 +528,7 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motionFile, NSString *previ
         // just before the artwork changes. The final second is the existing hand-off allowance.
         // Eight-second clips may loop before a long line changes, so leave those stationary.
         double lyricDuration = MAX(seconds - 1.0, 0);
-        double scrollDuration = seconds < 7.99 ? MIN(0.45, lyricDuration) : 0;
+        double scrollDuration = longLineClip ? 0 : MIN(0.45, lyricDuration);
         double scrollStart = MAX(lyricDuration - scrollDuration, 0);
         if (!drawOver(CMSampleBufferGetImageBuffer(sample), motion, over, elapsed, scrollStart, scrollDuration)) {
             ok = NO;
