@@ -22,6 +22,9 @@ static const NSUInteger kSeenTracks = 200;
 // A track whose request was lost may be asked for again after this long, twice as long after each loss
 // in a row up to the most: soon enough for the song still playing, not so soon that a busy server is pressed.
 static const NSTimeInterval kRetryPause = 10, kRetryPauseMost = 60;
+// A successful HTTP response with no parsed lines may be an early empty reply; retry a few times,
+// but leave a track with no lyrics alone after the final attempt.
+static const NSUInteger kSpotifyEmptyReplyTries = 4;
 // What spclient needs from a request to answer it as the signed-in app.
 static NSString *const kSpclientHeaders[] = {@"authorization", @"client-token", @"app-platform", @"spotify-app-version", @"user-agent", @"accept-language"};
 
@@ -318,9 +321,7 @@ void SGKaraokeAskSpotifyForTiming(NSString *trackID) {
 // (about two minutes) leaves the file without lyrics until its names are edited or Spotify restarts; a
 // source answer that tells "lost" from "none" would lift that.
 static const NSUInteger kLocalTries = 4;
-// A successful HTTP response with no parsed lines may be an early empty reply; retry a few times,
-// but leave a track with no lyrics alone after the final attempt.
-static const NSUInteger kSpotifyEmptyReplyTries = 4;
+
 
 // With no source of the mod's switched on, a local file still gets LRCLIB, the open and keyless floor of
 // the order, by the names it goes by: spclient has nothing for it, and without this the redesign's
