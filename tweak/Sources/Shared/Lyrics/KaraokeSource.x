@@ -266,9 +266,12 @@ static BOOL requestFromSpotify(NSString *trackID) {
         // A refused authorization is lost too: the captured one may have expired, and Spotify's next
         // spclient request brings a fresh one.
         BOOL lost = SGLyricsReplyFailed(response, error) || status == 401 || status == 403;
+        BOOL emptyReply = status >= 200 && status < 300 && !lines.count;
         dispatch_async(dispatch_get_main_queue(), ^{
             [sg_looking removeObject:trackID];
-            if (lost) {
+            BOOL retryEmptyReply = emptyReply && !sg_lyrics[trackID]
+                                && sg_losses[trackID].unsignedIntegerValue < kSpotifyEmptyReplyTries;
+            if (lost || retryEmptyReply) {
                 askAgainLater(trackID);
             } else {
                 [sg_asking removeObject:trackID];
@@ -315,6 +318,9 @@ void SGKaraokeAskSpotifyForTiming(NSString *trackID) {
 // (about two minutes) leaves the file without lyrics until its names are edited or Spotify restarts; a
 // source answer that tells "lost" from "none" would lift that.
 static const NSUInteger kLocalTries = 4;
+// A successful HTTP response with no parsed lines may be an early empty reply; retry a few times,
+// but leave a track with no lyrics alone after the final attempt.
+static const NSUInteger kSpotifyEmptyReplyTries = 4;
 
 // With no source of the mod's switched on, a local file still gets LRCLIB, the open and keyless floor of
 // the order, by the names it goes by: spclient has nothing for it, and without this the redesign's
