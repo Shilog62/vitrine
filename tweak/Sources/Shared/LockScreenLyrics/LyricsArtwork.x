@@ -184,27 +184,42 @@ static MPMediaItemAnimatedArtwork *artworkFor(NSString *artworkID, SGLockLine *l
     return [[MPMediaItemAnimatedArtwork alloc] initWithArtworkID:artworkID
         previewImageRequestHandler:^(CGSize wanted, void (^completion)(UIImage *)) {
             sg_previewAskedAt = CFAbsoluteTimeGetCurrent();
+            SGLog(@"lock lyrics: PREVIEW REQUEST for %@ (%.0fx%.0f)", artworkID, wanted.width, wanted.height);
             // One drawn ahead is handed over at once, as Apple asks of a preview; only a miss waits for drawing.
             UIImage *ready = [sg_previews objectForKey:artworkID];
             if (ready) {
+                SGLog(@"lock lyrics: preview %@ served from cache (%.0fx%.0f)", artworkID, ready.size.width, ready.size.height);
                 completion(ready);
                 return;
             }
             dispatch_async(sg_previewQueue, ^{
-                completion(previewFor(artworkID, line, size));
+                UIImage *preview = previewFor(artworkID, line, size);
+                SGLog(@"lock lyrics: preview %@ returning %@", artworkID,
+                      preview ? [NSString stringWithFormat:@"%.0fx%.0f", preview.size.width, preview.size.height] : @"nil");
+                completion(preview);
                 static NSUInteger told;
-                if (told++ < 10) SGLog(@"lock lyrics: preview of %@ was not drawn ahead", artworkID);
+                if (!preview && told++ < 10) SGLog(@"lock lyrics: preview of %@ was not drawn ahead", artworkID);
             });
         }
         videoAssetFileURLRequestHandler:^(CGSize wanted, void (^completion)(NSURL *)) {
             sg_askedAt = CFAbsoluteTimeGetCurrent();
+            SGLog(@"lock lyrics: VIDEO URL REQUEST for %@ (%.0fx%.0f), motion=%@",
+                  artworkID, wanted.width, wanted.height, line.motion.lastPathComponent ?: @"cover");
             dispatch_async(sg_queue, ^{
                 // A line already sung by the time its turn comes is not drawn.
                 if (!stillShown(artworkID)) {
+                    SGLog(@"lock lyrics: VIDEO URL for %@ rejected: artwork is no longer shown", artworkID);
                     completion(nil);
                     return;
                 }
-                completion(writeClip(artworkID, line, size) ? clipFile(artworkID) : nil);
+                BOOL written = writeClip(artworkID, line, size);
+                NSURL *result = written ? clipFile(artworkID) : nil;
+                NSNumber *bytes = nil;
+                BOOL exists = result && [NSFileManager.defaultManager fileExistsAtPath:result.path];
+                if (exists) [result getResourceValue:&bytes forKey:NSURLFileSizeKey error:nil];
+                SGLog(@"lock lyrics: VIDEO URL for %@ returning %@, exists=%@, size=%@ bytes",
+                      artworkID, result.lastPathComponent ?: @"nil", exists ? @"YES" : @"NO", bytes ?: @0);
+                completion(exists ? result : nil);
             });
         }];
 }
