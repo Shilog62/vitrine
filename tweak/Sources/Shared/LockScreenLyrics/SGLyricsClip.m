@@ -262,6 +262,8 @@ BOOL SGLyricsClipWrite(NSURL *file, CGImageRef backdrop, NSString *line, NSStrin
     BOOL moved = [NSFileManager.defaultManager moveItemAtURL:partial toURL:file error:&moveError];
     NSDictionary *attributes = moved ? [NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil] : nil;
     SGLog(@"lock lyrics: motion writer finished output=%@ moved=%@ bytes=%@ move-error=%@", file.lastPathComponent, moved ? @"YES" : @"NO", attributes[NSFileSize] ?: @0, moveError ?: @"none");
+    // Read back only the first three completed clips in this process; the check never affects success.
+    if (moved && takeEncodedMotionDiagnosticSlot()) logEncodedMotionSamples(file, seconds);
     return moved;
 }
 
@@ -495,6 +497,110 @@ static BOOL eachFrame(AVURLAsset *asset, AVAssetTrack *track, Motion motion, dou
         at = 0;
     }
     return YES;
+}
+
+// Diagnostic-only check of the finished MP4. Sample narrow strips at the left and right edges,
+// outside the centered lyric column, so moving glyphs cannot masquerade as Canvas motion.
+static const size_t kMotionDiagnosticWidth = 48;
+static const size_t kMotionDiagnosticHeight = 64;
+static const size_t kMotionDiagnosticChannels = 3;
+static const size_t kMotionDiagnosticCapacity =
+    kMotionDiagnosticWidth * kMotionDiagnosticHeight * kMotionDiagnosticChannels;
+
+static size_t copyMotionDiagnosticPixels(CGImageRef image, uint8_t *samples, size_t capacity) {
+    if (!image || !samples || capacity < kMotionDiagnosticCapacity) return 0;
+    uint8_t pixels[kMotionDiagnosticWidth * kMotionDiagnosticHeight * 4] = {0};
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(pixels, kMotionDiagnosticWidth, kMotionDiagnosticHeight, 8,
+        kMotionDiagnosticWidth * 4, space, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    CGColorSpaceRelease(space);
+    if (!context) return 0;
+    CGContextSetInterpolationQuality(context, kCGInterpolationMedium);
+    CGContextDrawImage(context, CGRectMake(0, 0, kMotionDiagnosticWidth, kMotionDiagnosticHeight), image);
+    CGContextRelease(context);
+
+    size_t used = 0;
+    for (size_t y = 0; y < kMotionDiagnosticHeight; y++) {
+        for (size_t x = 0; x < kMotionDiagnosticWidth; x++) {
+            // The lyrics are centered; leave a wide margin around their whole column.
+            if (x >= 6 && x < kMotionDiagnosticWidth - 6) continue;
+            const uint8_t *pixel = pixels + (y * kMotionDiagnosticWidth + x) * 4;
+            samples[used++] = pixel[0];
+            samples[used++] = pixel[1];
+            samples[used++] = pixel[2];
+        }
+    }
+    return used;
+}
+
+static void logEncodedMotionSamples(NSURL *file, double seconds) {
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:file options:nil];
+    AVAssetImageGenerator *generator = [AVAssetImageGenerator assetImageGeneratorWithAsset:asset];
+    generator.appliesPreferredTrackTransform = NO;
+    generator.maximumSize = CGSizeMake(kMotionDiagnosticWidth, kMotionDiagnosticHeight);
+    generator.requestedTimeToleranceBefore = CMTimeMake(1, 30);
+    generator.requestedTimeToleranceAfter = CMTimeMake(1, 30);
+
+    double edge = MIN(0.1, seconds * 0.1);
+    double requested[] = {edge, seconds * 0.5, MAX(edge, seconds - edge)};
+    uint8_t samples[3][kMotionDiagnosticCapacity] = {{0}};
+    size_t counts[3] = {0};
+    double actual[3] = {-1, -1, -1};
+    for (NSUInteger i = 0; i < 3; i++) {
+        NSError *error = nil;
+        CMTime actualTime = kCMTimeInvalid;
+        CGImageRef image = [generator copyCGImageAtTime:CMTimeMakeWithSeconds(requested[i], 600)
+                                            actualTime:&actualTime error:&error];
+        if (!image) {
+            SGLog(@"lock lyrics: encoded motion sample failed output=%@ sample=%lu requested=%.3f error=%@",
+                  file.lastPathComponent, (unsigned long)i, requested[i], error ?: @"no image");
+            continue;
+        }
+        actual[i] = CMTimeGetSeconds(actualTime);
+        counts[i] = copyMotionDiagnosticPixels(image, samples[i], sizeof(samples[i]));
+        CGImageRelease(image);
+    }
+    [generator cancelAllCGImageGeneration];
+
+    if (counts[0] == 0 || counts[1] != counts[0] || counts[2] != counts[0]) {
+        SGLog(@"lock lyrics: encoded motion samples incomplete output=%@ pixels=%lu/%lu/%lu times=%.3f/%.3f/%.3f",
+              file.lastPathComponent, (unsigned long)(counts[0] / 3), (unsigned long)(counts[1] / 3),
+              (unsigned long)(counts[2] / 3), actual[0], actual[1], actual[2]);
+        return;
+    }
+
+    double meanDiff[2] = {0, 0};
+    double changedPercent[2] = {0, 0};
+    for (NSUInteger pair = 0; pair < 2; pair++) {
+        uint64_t total = 0;
+        NSUInteger changed = 0, pixelsCount = (NSUInteger)(counts[0] / 3);
+        for (size_t i = 0; i < counts[0]; i += 3) {
+            int largest = 0;
+            for (size_t channel = 0; channel < 3; channel++) {
+                int difference = abs((int)samples[pair][i + channel] - (int)samples[pair + 1][i + channel]);
+                total += (uint64_t)difference;
+                largest = MAX(largest, difference);
+            }
+            if (largest >= 8) changed++;
+        }
+        meanDiff[pair] = (double)total / counts[0];
+        changedPercent[pair] = pixelsCount ? 100.0 * changed / pixelsCount : 0;
+    }
+    SGLog(@"lock lyrics: encoded motion samples output=%@ times=%.3f/%.3f/%.3f mean-abs-rgb=%.2f/%.2f changed-pixels(>=8)=%.1f%%/%.1f%% sampled-pixels=%lu",
+          file.lastPathComponent, actual[0], actual[1], actual[2], meanDiff[0], meanDiff[1],
+          changedPercent[0], changedPercent[1], (unsigned long)(counts[0] / 3));
+}
+
+static BOOL takeEncodedMotionDiagnosticSlot(void) {
+    static NSObject *lock;
+    static NSUInteger used;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ lock = [NSObject new]; });
+    @synchronized (lock) {
+        if (used >= 3) return NO;
+        used++;
+        return YES;
+    }
 }
 
 CGImageRef SGLyricsClipMotionFrame(NSURL *motionFile, NSString *previous, NSString *line, NSString *next, double from) {
