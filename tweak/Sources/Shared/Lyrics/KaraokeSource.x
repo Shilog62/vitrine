@@ -1,7 +1,7 @@
 // Where the karaoke page gets its lines and its clock. The color-lyrics body is copied as it passes
 // the same URLSession delegates AdBlock/AdNetwork.x reads, untouched, and kept per track, since the
-// page may open long after the request finished. The clock is SPTEsperantoPlayer's state, asked for on
-// every frame: the player is caught the first time the app asks it, and its position runs on by itself.
+// page may open long after the request finished. Track and position use PlayerState's shared report,
+// the same state the moving-artwork follower sees, falling back to the player before its first report.
 // With a source of the mod's on, the color-lyrics body is Shared/LyricsSources' to answer and it
 // hands the lines over.
 #import "Core/SGCore.h"
@@ -244,6 +244,29 @@ BOOL SGEeveeLyricsOn(void) {
     return SGEeveeSpotifyInjected() && eeveeLyricsOn();
 }
 
+// Log the shape, not the lyric text, when Spotify answers successfully but nothing is parsed.
+// This distinguishes a genuinely empty reply from a body format the parser does not recognize.
+static NSString *spotifyEmptyReplyShape(NSData *body) {
+    NSUInteger length = body.length;
+    const uint8_t *bytes = body.bytes;
+    NSString *firstByte = length ? [NSString stringWithFormat:@"0x%02x", bytes[0]] : @"none";
+    id root = length ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : nil;
+    NSDictionary *dictionary = [root isKindOfClass:NSDictionary.class] ? root : nil;
+    NSDictionary *lyrics = [dictionary[@"lyrics"] isKindOfClass:NSDictionary.class] ? dictionary[@"lyrics"] : nil;
+    id rawLines = lyrics[@"lines"];
+    NSString *lineCount = [rawLines isKindOfClass:NSArray.class]
+        ? [NSString stringWithFormat:@"%lu", (unsigned long)[(NSArray *)rawLines count]] : @"<missing>";
+    id firstLine = [rawLines isKindOfClass:NSArray.class] ? [(NSArray *)rawLines firstObject] : nil;
+    NSArray *firstKeys = [firstLine isKindOfClass:NSDictionary.class]
+        ? [[(NSDictionary *)firstLine allKeys] sortedArrayUsingSelector:@selector(compare:)] : @[];
+    NSString *syncType = [lyrics[@"syncType"] isKindOfClass:NSString.class] ? lyrics[@"syncType"] : @"<missing>";
+    NSArray *rootKeys = dictionary ? [[dictionary allKeys] sortedArrayUsingSelector:@selector(compare:)] : @[];
+    NSString *firstLineType = firstLine ? NSStringFromClass([firstLine class]) : @"<none>";
+    return [NSString stringWithFormat:@"bytes=%lu first=%@ root=%@ rootKeys=%@ syncType=%@ rawLines=%@ firstLineType=%@ firstLineKeys=%@",
+            (unsigned long)length, firstByte, dictionary ? @"JSON" : @"not-JSON", rootKeys,
+            syncType, lineCount, firstLineType, firstKeys];
+}
+
 // Main queue only. NO, asking nothing, before any request of Spotify's has shown the headers, and with
 // EeveeSpotify injected, whose lyrics answer the request: a second asker beside it froze Spotify after launch.
 static BOOL requestFromSpotify(NSString *trackID) {
@@ -270,6 +293,9 @@ static BOOL requestFromSpotify(NSString *trackID) {
         // spclient request brings a fresh one.
         BOOL lost = SGLyricsReplyFailed(response, error) || status == 401 || status == 403;
         BOOL emptyReply = status >= 200 && status < 300 && !lines.count;
+        if (emptyReply) {
+            SGLog(@"karaoke: Spotify returned no parsed lines for %@: %@", trackID, spotifyEmptyReplyShape(body));
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             [sg_looking removeObject:trackID];
             BOOL retryEmptyReply = emptyReply && !sg_lyrics[trackID]
@@ -401,6 +427,11 @@ id SGKaraokePlayer(void) {
 }
 
 static SPTPlayerState *playerState(void) {
+    // Read the same published state as LyricsArtwork.x and SGMotionFollower. Asking SPTEsperantoPlayer
+    // directly can return a different track during a transition, pairing one track's lines with another
+    // track's Canvas and position. Fall back only before the shared player has reported its first state.
+    SPTPlayerState *reported = SGPlayerState();
+    if (reported) return reported;
     id player = sg_player;
     return [player respondsToSelector:@selector(state)] ? [(id<SPTPlayer>)player state] : nil;
 }
