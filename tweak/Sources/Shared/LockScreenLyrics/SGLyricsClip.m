@@ -640,7 +640,7 @@ static void lyricsClipScrollTiming(SGLyricsTimedOverlay *overlay, NSInteger from
     *duration = 0;
     if (!overlay || !overlay->scroll) return;
     double span = MAX((overlay->endMs - overlay->startMs) / 1000.0, 0);
-    *duration = MIN(0.45, span);
+    *duration = MIN(0.8, span);
     if (*duration > 0)
         *start = (overlay->endMs - *duration * 1000.0 - fromMs) / 1000.0;
 }
