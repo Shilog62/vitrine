@@ -33,6 +33,8 @@ static const double kClipGroupSeconds = 6.0;
 @property (nonatomic) double from, seconds;   // where in the song the clip starts and how long it is
 @property (nonatomic, copy) NSArray<SGKaraokeLine *> *lines; // a whole timed segment, for moving artwork
 @property (nonatomic) NSInteger startMs;       // song position at the start of a grouped segment
+@property (nonatomic) NSInteger frozenPositionMs;
+@property (nonatomic) BOOL frozen;
 @property (nonatomic, copy) NSString *nextArtworkID;
 @property (nonatomic, strong) SGLockLine *nextSegment;
 @end
@@ -44,6 +46,7 @@ static dispatch_source_t sg_timer;
 static CFAbsoluteTime sg_due;
 // Where the song was, how fast it went and when, as the timer was armed: a report that strays from it is a seek.
 static NSInteger sg_armedMs;
+static NSInteger sg_pausedPositionMs = -1;
 static double sg_armedSpeed;
 static CFAbsoluteTime sg_armedAt;
 // Lyrics are picked and the player is not paused: only then does the timer run.
@@ -137,14 +140,18 @@ static UIImage *previewFor(NSString *artworkID, SGLockLine *line, CGSize size) {
     UIImage *preview = [sg_previews objectForKey:artworkID];
     if (preview) return preview;
     BOOL tryMotion = line.motion && !motionFailed(line.motion);
-    NSInteger previewFromMs = line.startMs;
-    if (tryMotion && line.lines.count && ![NSFileManager.defaultManager fileExistsAtPath:clipFile(artworkID).path]) {
+    NSInteger previewFromMs = line.frozen ? line.frozenPositionMs : line.startMs;
+    if (tryMotion && line.lines.count && !line.frozen
+        && ![NSFileManager.defaultManager fileExistsAtPath:clipFile(artworkID).path]) {
         NSInteger currentMs = SGKaraokePositionMs() - SGKaraokeDelayMs();
         NSInteger segmentEndMs = line.startMs + kClipGroupMilliseconds;
         if (currentMs > line.startMs && currentMs < segmentEndMs) previewFromMs = currentMs;
     }
     CGImageRef frame = tryMotion ? (line.lines.count
-        ? SGLyricsClipMotionFrameForLines(line.motion, line.lines, previewFromMs)
+        ? (line.frozen
+            ? SGLyricsClipMotionFrameForLinesAtPosition(line.motion, line.lines, line.startMs,
+                                                        line.frozenPositionMs, line.seconds)
+            : SGLyricsClipMotionFrameForLines(line.motion, line.lines, previewFromMs))
         : SGLyricsClipMotionFrame(line.motion, line.previous, line.line, line.next, line.from)) : NULL;
     if (tryMotion && !frame) markMotionFailed(line.motion, artworkID);
     if (!frame) {
@@ -165,7 +172,10 @@ static BOOL writeClip(NSString *artworkID, SGLockLine *line, CGSize size) {
     CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
     BOOL tryMotion = line.motion && !motionFailed(line.motion);
     BOOL over = tryMotion && (line.lines.count
-        ? SGLyricsClipWriteOverMotionForLines(file, line.motion, line.lines, line.startMs, line.seconds)
+        ? (line.frozen
+            ? SGLyricsClipWritePausedOverMotionForLines(file, line.motion, line.lines, line.startMs,
+                                                        line.frozenPositionMs, line.seconds)
+            : SGLyricsClipWriteOverMotionForLines(file, line.motion, line.lines, line.startMs, line.seconds))
         : SGLyricsClipWriteOverMotion(file, line.motion, line.previous, line.line, line.next, line.from, line.seconds));
     if (tryMotion && !over) markMotionFailed(line.motion, artworkID);
     BOOL ok = over;
@@ -296,6 +306,28 @@ static NSString *textAt(NSArray<SGKaraokeLine *> *lines, NSInteger index) {
     return index >= 0 && index < (NSInteger)lines.count ? SGKaraokeLineText(lines[index]) : nil;
 }
 
+// The lock screen artwork ID changes only when the lead line or its resting state changes.
+typedef struct {
+    NSInteger index;
+    BOOL resting;
+} SGLyricsDisplayState;
+
+static SGLyricsDisplayState displayStateAt(NSArray<SGKaraokeLine *> *lines, NSInteger position) {
+    SGLyricsDisplayState state;
+    state.index = SGKaraokeLeadLine(lines, position);
+    BOOL nextFarOff = state.index + 1 >= (NSInteger)lines.count
+        || lines[(NSUInteger)(state.index + 1)].start - position > SGKaraokeBreakMs;
+    state.resting = state.index < 0
+        || (position > SGKaraokeSungEnd(lines[(NSUInteger)state.index]) + SGKaraokeBreakMs && nextFarOff);
+    return state;
+}
+
+static void setSegmentText(SGLockLine *segment, NSArray<SGKaraokeLine *> *lines, NSInteger position) {
+    SGLyricsDisplayState state = displayStateAt(lines, position);
+    segment.line = state.resting ? nil : textAt(lines, state.index);
+    segment.next = textAt(lines, state.index + 1);
+}
+
 void SGLyricsArtworkSetMotion(NSString *uri, NSURL *file) {
     @synchronized (sg_failedMotion) {
         if (file) [sg_failedMotion removeObject:file.path];
@@ -335,24 +367,8 @@ static SGLockLine *segmentAt(NSArray<SGKaraokeLine *> *lines, NSInteger startMs,
     segment.motion = motion;
     segment.cover = cover;
     segment.style = style;
+    setSegmentText(segment, lines, startMs);
     return segment;
-}
-
-// The lock screen artwork ID changes only when the lead line or its resting state changes.
-// Keep this definition in one place so the timer and the artwork it offers agree exactly.
-typedef struct {
-    NSInteger index;
-    BOOL resting;
-} SGLyricsDisplayState;
-
-static SGLyricsDisplayState displayStateAt(NSArray<SGKaraokeLine *> *lines, NSInteger position) {
-    SGLyricsDisplayState state;
-    state.index = SGKaraokeLeadLine(lines, position);
-    BOOL nextFarOff = state.index + 1 >= (NSInteger)lines.count
-        || lines[(NSUInteger)(state.index + 1)].start - position > SGKaraokeBreakMs;
-    state.resting = state.index < 0
-        || (position > SGKaraokeSungEnd(lines[(NSUInteger)state.index]) + SGKaraokeBreakMs && nextFarOff);
-    return state;
 }
 
 // SGKaraokeMsToChange also reports timing events that do not change the lock screen's artwork
@@ -463,18 +479,30 @@ static NSTimeInterval update(void) {
                 sg_clipStartMs = position;
                 remaining = kClipGroupMilliseconds;
             }
-            artworkID = [NSString stringWithFormat:@"%@-g%ld-%@", trackID, (long)segmentStartMs, look];
-            BOOL segmentAlreadyShown = [artworkID isEqualToString:sg_shownID];
-            offeredWait = ms > 0
-                ? MIN(ms, remaining) / 1000.0
-                : segmentAlreadyShown ? (remaining + 1) / 1000.0 : -1;
             offeredLine = segmentAt(lines, segmentStartMs, motion, sg_cover, style);
-            // Only prepare another segment while a later lyric state exists, or while the
-            // current segment is already on screen and must finish its six-second window.
-            if (ms > 0 || segmentAlreadyShown) {
-                NSInteger nextStartMs = segmentStartMs + kClipGroupMilliseconds;
-                offeredLine.nextArtworkID = [NSString stringWithFormat:@"%@-g%ld-%@", trackID, (long)nextStartMs, look];
-                offeredLine.nextSegment = segmentAt(lines, nextStartMs, motion, sg_cover, style);
+            if (state.isPaused) {
+                // The lock screen loops animated artwork independently of Spotify's pause state.
+                // Give iOS a fresh clip whose lyric overlay is held at the exact paused song position.
+                artworkID = [NSString stringWithFormat:@"%@-p%ld-g%ld-%@", trackID,
+                             (long)position, (long)segmentStartMs, look];
+                offeredLine.frozen = YES;
+                offeredLine.frozenPositionMs = position;
+                setSegmentText(offeredLine, lines, position);
+                offeredWait = -1;
+                SGLog(@"lock lyrics: paused artwork offered %@ at %.3f s", artworkID, position / 1000.0);
+            } else {
+                artworkID = [NSString stringWithFormat:@"%@-g%ld-%@", trackID, (long)segmentStartMs, look];
+                BOOL segmentAlreadyShown = [artworkID isEqualToString:sg_shownID];
+                offeredWait = ms > 0
+                    ? MIN(ms, remaining) / 1000.0
+                    : segmentAlreadyShown ? (remaining + 1) / 1000.0 : -1;
+                // Only prepare another segment while a later lyric state exists, or while the
+                // current segment is already on screen and must finish its six-second window.
+                if (ms > 0 || segmentAlreadyShown) {
+                    NSInteger nextStartMs = segmentStartMs + kClipGroupMilliseconds;
+                    offeredLine.nextArtworkID = [NSString stringWithFormat:@"%@-g%ld-%@", trackID, (long)nextStartMs, look];
+                    offeredLine.nextSegment = segmentAt(lines, nextStartMs, motion, sg_cover, style);
+                }
             }
         } else {
             sg_clipStartMs = -1;
@@ -511,11 +539,11 @@ static NSTimeInterval update(void) {
         SGNowPlayingSetExtras(@"lyrics", @{MPNowPlayingInfoProperty3x4AnimatedArtwork:
                                                artworkFor(artworkID, offeredLine)},
                               state.track.trackTitle);
-        if (groupedMotion) {
+        if (groupedMotion && offeredLine.nextArtworkID && offeredLine.nextSegment) {
             // The next segment's preview can be prepared separately; its video is queued after
             // the current segment's URL has been delivered.
             drawAhead(artworkID, offeredLine.nextArtworkID, offeredLine.nextSegment);
-        } else if (index + 1 < (NSInteger)lines.count) {
+        } else if (!groupedMotion && index + 1 < (NSInteger)lines.count) {
             NSString *ahead = [NSString stringWithFormat:@"%@-%ld-%@", trackID, (long)index + 1, look];
             drawAhead(artworkID, ahead, lineAt(lines, index + 1, NO, motion, sg_cover, style));
         }
@@ -571,6 +599,9 @@ static void tick(void) {
     if (sg_running && !wasRunning) {
         sg_clipStartMs = -1;
         sg_clipMotionLook = nil;
+        sg_pausedPositionMs = -1;
+    } else if (on && state.isPaused) {
+        sg_pausedPositionMs = SGKaraokePositionMs();
     }
     if (on) tick();
     else {
@@ -580,7 +611,15 @@ static void tick(void) {
 }
 // A seek, or a new speed, moves the next change; a report where the song is where it was headed does not.
 - (void)playerStateDidReport:(SPTPlayerState *)state {
-    if (!sg_running) return;
+    if (!sg_running) {
+        if (!state.isPaused || !SGLockArtworkShowsLyrics(SGLockScreenArtwork())) return;
+        NSInteger position = SGKaraokePositionMs();
+        if (position >= 0 && (sg_pausedPositionMs < 0 || fabs(position - sg_pausedPositionMs) > 100)) {
+            sg_pausedPositionMs = position;
+            tick();
+        }
+        return;
+    }
     double speed = sg_armedSpeed > 0 ? sg_armedSpeed : 1;
     double expected = sg_armedMs + (CFAbsoluteTimeGetCurrent() - sg_armedAt) * 1000 * speed;
     // As SGKaraokePositionMs reads it, from the state reported.

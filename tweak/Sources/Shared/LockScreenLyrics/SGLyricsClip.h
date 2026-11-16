@@ -32,8 +32,14 @@ BOOL SGLyricsClipWriteOverMotion(NSURL *file, NSURL *motion, NSString *previous,
 // between fromMs and fromMs + seconds. The preview is the first frame of that segment.
 CGImageRef SGLyricsClipMotionFrameForLines(NSURL *motion, NSArray<SGKaraokeLine *> *lines,
                                            NSInteger fromMs) CF_RETURNS_RETAINED;
+// A still lyric position over a moving background, captured at positionMs within the same segment.
+CGImageRef SGLyricsClipMotionFrameForLinesAtPosition(NSURL *motion, NSArray<SGKaraokeLine *> *lines,
+                                                      NSInteger segmentStartMs, NSInteger positionMs,
+                                                      double seconds) CF_RETURNS_RETAINED;
 BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motion, NSArray<SGKaraokeLine *> *lines,
                                          NSInteger fromMs, double seconds);
+BOOL SGLyricsClipWritePausedOverMotionForLines(NSURL *file, NSURL *motion, NSArray<SGKaraokeLine *> *lines,
+                                                NSInteger segmentStartMs, NSInteger positionMs, double seconds);
 
 // The end of a line's artwork ID, so a clip kept under it is the one wanted: the style, which a clip falling
 // back to the cover is drawn in, and with moving artwork m and the first 16 characters of its file's name (the

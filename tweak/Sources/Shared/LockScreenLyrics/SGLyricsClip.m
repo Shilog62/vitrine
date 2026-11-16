@@ -689,8 +689,61 @@ CGImageRef SGLyricsClipMotionFrameForLines(NSURL *motionFile, NSArray<SGKaraokeL
     return frame;
 }
 
-BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray<SGKaraokeLine *> *lines,
-                                         NSInteger fromMs, double requestedSeconds) {
+CGImageRef SGLyricsClipMotionFrameForLinesAtPosition(NSURL *motionFile, NSArray<SGKaraokeLine *> *lines,
+                                                      NSInteger segmentStartMs, NSInteger positionMs,
+                                                      double seconds) {
+    if (!lines.count || !(seconds > 0)
+        || positionMs < segmentStartMs
+        || positionMs >= segmentStartMs + (NSInteger)llround(seconds * 1000.0)) return NULL;
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:motionFile options:nil];
+    Motion motion;
+    AVAssetTrack *track = motionTrack(asset, &motion);
+    if (!track) return NULL;
+
+    SGLyricsTimedOverlay *overlays = NULL;
+    NSUInteger overlayCount = 0;
+    if (!lyricsClipPrepareOverlays(motion, lines, segmentStartMs, seconds, &overlays, &overlayCount)) return NULL;
+    SGLyricsTimedOverlay *overlay = lyricsClipOverlayAt(overlays, overlayCount, lines, positionMs);
+    if (!overlay) {
+        lyricsClipFreeOverlays(overlays, overlayCount);
+        return NULL;
+    }
+
+    double scrollStart = 0, scrollDuration = 0;
+    lyricsClipScrollTiming(overlay, segmentStartMs, &scrollStart, &scrollDuration);
+    double frozenElapsed = (positionMs - segmentStartMs) / 1000.0;
+    __block CGImageRef frame = NULL;
+    __block BOOL drawOK = YES;
+    BOOL read = eachFrame(asset, track, motion, positionMs / 1000.0, MIN(0.12, motion.length),
+        ^BOOL(CMSampleBufferRef sample) {
+            CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sample);
+            if (!drawOver(buffer, motion, overlay->over, frozenElapsed, scrollStart, scrollDuration)) {
+                drawOK = NO;
+                return NO;
+            }
+            CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
+            CGContextRef context = newContext(motion.stored, CVPixelBufferGetBaseAddress(buffer),
+                                               CVPixelBufferGetBytesPerRow(buffer));
+            CGImageRef whole = CGBitmapContextCreateImage(context);
+            CGContextRelease(context);
+            CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
+            if (whole) {
+                frame = CGImageCreateWithImageInRect(whole, cutIn(motion));
+                CGImageRelease(whole);
+            }
+            return NO;
+        });
+    lyricsClipFreeOverlays(overlays, overlayCount);
+    if (!read || !drawOK) {
+        CGImageRelease(frame);
+        return NULL;
+    }
+    return frame;
+}
+
+static BOOL lyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray<SGKaraokeLine *> *lines,
+                                               NSInteger fromMs, double requestedSeconds,
+                                               NSInteger frozenPositionMs, BOOL freezeLyrics) {
     if (!lines.count || !(requestedSeconds > 0)) return NO;
     AVURLAsset *asset = [AVURLAsset URLAssetWithURL:motionFile options:nil];
     Motion motion;
@@ -700,6 +753,12 @@ BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray
     // The lock screen changes artwork IDs only at segment boundaries. Keep the output short and
     // continuous, while the overlay itself follows all lyric timing events within this segment.
     double seconds = requestedSeconds;
+    if (freezeLyrics && (frozenPositionMs < fromMs
+        || frozenPositionMs >= fromMs + (NSInteger)llround(seconds * 1000.0))) {
+        SGLog(@"lock lyrics: paused grouped writer rejected output=%@ segment=%ld position=%ld seconds=%.3f",
+              file.lastPathComponent, (long)fromMs, (long)frozenPositionMs, seconds);
+        return NO;
+    }
     NSURL *partial = [file URLByAppendingPathExtension:@"partial"];
     [NSFileManager.defaultManager removeItemAtURL:partial error:nil];
     AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:partial fileType:AVFileTypeMPEG4 error:nil];
@@ -725,6 +784,22 @@ BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray
         [writer cancelWriting];
         return NO;
     }
+    SGLyricsTimedOverlay *frozenOverlay = NULL;
+    double frozenElapsed = 0, frozenScrollStart = 0, frozenScrollDuration = 0;
+    if (freezeLyrics) {
+        frozenOverlay = lyricsClipOverlayAt(overlays, overlayCount, lines, frozenPositionMs);
+        if (!frozenOverlay) {
+            lyricsClipFreeOverlays(overlays, overlayCount);
+            [writer cancelWriting];
+            return NO;
+        }
+        lyricsClipScrollTiming(frozenOverlay, fromMs, &frozenScrollStart, &frozenScrollDuration);
+        frozenElapsed = (frozenPositionMs - fromMs) / 1000.0;
+        SGLog(@"lock lyrics: paused grouped clip plan output=%@ segment=%.3f position=%.3f line=%ld resting=%@ scroll-progress=%.3f",
+              file.lastPathComponent, fromMs / 1000.0, frozenPositionMs / 1000.0,
+              (long)frozenOverlay->index, frozenOverlay->resting ? @"YES" : @"NO",
+              frozenScrollDuration > 0 ? MIN(MAX((frozenElapsed - frozenScrollStart) / frozenScrollDuration, 0), 1) : 0);
+    }
     for (NSUInteger i = 0; i < overlayCount; i++) {
         SGLyricsTimedOverlay *overlay = &overlays[i];
         double scrollStart = 0, scrollDuration = 0;
@@ -741,14 +816,17 @@ BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray
 
     __block BOOL ok = YES, any = NO;
     __block NSUInteger frameCount = 0;
-    BOOL read = eachFrame(asset, track, motion, fromMs / 1000.0, seconds, ^BOOL(CMSampleBufferRef sample) {
+    double backgroundFrom = (freezeLyrics ? frozenPositionMs : fromMs) / 1000.0;
+    BOOL read = eachFrame(asset, track, motion, backgroundFrom, seconds, ^BOOL(CMSampleBufferRef sample) {
         double elapsed = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample));
         NSInteger positionMs = fromMs + (NSInteger)llround(elapsed * 1000.0);
-        SGLyricsTimedOverlay *overlay = lyricsClipOverlayAt(overlays, overlayCount, lines, positionMs);
-        double scrollStart = 0, scrollDuration = 0;
-        lyricsClipScrollTiming(overlay, fromMs, &scrollStart, &scrollDuration);
+        SGLyricsTimedOverlay *overlay = freezeLyrics
+            ? frozenOverlay : lyricsClipOverlayAt(overlays, overlayCount, lines, positionMs);
+        double scrollStart = freezeLyrics ? frozenScrollStart : 0;
+        double scrollDuration = freezeLyrics ? frozenScrollDuration : 0;
+        if (!freezeLyrics) lyricsClipScrollTiming(overlay, fromMs, &scrollStart, &scrollDuration);
         // Record representative frames only; the drawing path and its timing remain unchanged.
-        if (overlay && overlay->scroll && scrollDuration > 0 && elapsed >= scrollStart) {
+        if (!freezeLyrics && overlay && overlay->scroll && scrollDuration > 0 && elapsed >= scrollStart) {
             double phase = MIN(MAX((elapsed - scrollStart) / scrollDuration, 0), 1);
             NSUInteger bit = 0;
             const char *sampleName = NULL;
@@ -772,7 +850,8 @@ BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray
             }
         }
         CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sample);
-        if (!overlay || !drawOver(buffer, motion, overlay->over, elapsed, scrollStart, scrollDuration)) {
+        if (!overlay || !drawOver(buffer, motion, overlay->over,
+                                  freezeLyrics ? frozenElapsed : elapsed, scrollStart, scrollDuration)) {
             SGLog(@"lock lyrics: grouped overlay draw failed output=%@ frame=%lu position=%ld",
                   file.lastPathComponent, (unsigned long)frameCount, (long)positionMs);
             ok = NO;
@@ -815,6 +894,16 @@ BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray
           (unsigned long)frameCount, moveError ?: @"none");
     if (moved && takeEncodedMotionDiagnosticSlot()) logEncodedMotionSamples(file, seconds);
     return moved;
+}
+
+BOOL SGLyricsClipWriteOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray<SGKaraokeLine *> *lines,
+                                         NSInteger fromMs, double seconds) {
+    return lyricsClipWriteOverMotionForLines(file, motionFile, lines, fromMs, seconds, -1, NO);
+}
+
+BOOL SGLyricsClipWritePausedOverMotionForLines(NSURL *file, NSURL *motionFile, NSArray<SGKaraokeLine *> *lines,
+                                                NSInteger segmentStartMs, NSInteger positionMs, double seconds) {
+    return lyricsClipWriteOverMotionForLines(file, motionFile, lines, segmentStartMs, seconds, positionMs, YES);
 }
 
 // Diagnostic-only check of the finished MP4. Sample narrow strips at the left and right edges,
